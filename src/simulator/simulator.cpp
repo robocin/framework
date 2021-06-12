@@ -669,7 +669,7 @@ int main(int argc, char* argv[])
     parser.setApplicationDescription("ER-Force simulator command line interface");
     parser.addHelpOption();
 
-    QCommandLineOption geometryConfig({"g", "geometry"}, "The geometry file to load as default", "file", "2020");
+    QCommandLineOption geometryConfig({"g", "geometry"}, "The geometry file to load as default", "file", "2020B");
     QCommandLineOption realismConfig("realism", "Simulator realism configuration (short file name without the .txt)", "realism", "Realistic");
     parser.addOption(geometryConfig);
     parser.addOption(realismConfig);
@@ -697,7 +697,7 @@ int main(int argc, char* argv[])
     Timer timer;
     RobotCommandAdaptor blue{true, &timer}, yellow{false, &timer};
     SimProxy sim{&timer};
-    SSLVisionServer vision{SSL_SIMULATED_VISION_PORT};
+    SSLVisionServer vision{SSL_VISION_PORT};
     SimulatorCommandAdaptor commands{&timer, &vision};
 
     blue.connect(&blue, &RobotCommandAdaptor::sendRadioCommands, &sim, &SimProxy::handleRadioCommands);
@@ -723,7 +723,7 @@ int main(int argc, char* argv[])
     auto* teamBlue = c->mutable_set_team_blue();
     auto* teamYellow = c->mutable_set_team_yellow();
     for(auto* team : {teamBlue, teamYellow}) {
-        for(int i=0; i < 11; ++i){
+        for(int i=0; i < 6; ++i){
             auto* robot = team->add_robot();
             robot->CopyFrom(ERForce);
             robot->set_id(i);

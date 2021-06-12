@@ -22,6 +22,7 @@
 #define ROBOT_H
 
 #include "protobuf/robot.pb.h"
+#include <cmath>
 
 // used for replay of vision logs
 void robotSetDefault(robot::Specs *specs);
