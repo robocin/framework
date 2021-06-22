@@ -33,8 +33,8 @@ void robotSetDefault(robot::Specs *specs)
     float ratio = 0.0756 / 0.088;
 
     specs->set_angle(2 * acosf(ratio));
-    specs->set_v_max(3.5f);
-    specs->set_omega_max(25);
+    specs->set_v_max(3.7f);
+    specs->set_omega_max(26.2);
     specs->set_shot_linear_max(10);
     
     float angle = 45.f / 180 * M_PI;
@@ -51,12 +51,12 @@ void robotSetDefault(robot::Specs *specs)
 
     robot::LimitParameters *acceleration = specs->mutable_acceleration();
     
-    acceleration->set_a_speedup_f_max(4.9f);
-    acceleration->set_a_speedup_s_max(4.9f);
-    acceleration->set_a_speedup_phi_max(55);
-    acceleration->set_a_brake_f_max(6);
-    acceleration->set_a_brake_s_max(6);
-    acceleration->set_a_brake_phi_max(55);
+    acceleration->set_a_speedup_f_max(4.7f);
+    acceleration->set_a_speedup_s_max(4.7f);
+    acceleration->set_a_speedup_phi_max(50.8f);
+    acceleration->set_a_brake_f_max(5.9);
+    acceleration->set_a_brake_s_max(5.9);
+    acceleration->set_a_brake_phi_max(51.6);
 
     robot::LimitParameters *strategy = specs->mutable_strategy();
     strategy->set_a_speedup_f_max(4.9f);
