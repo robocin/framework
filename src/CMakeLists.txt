@@ -23,6 +23,7 @@ add_subdirectory(firmware)
 
 # libs
 add_subdirectory(config)
+add_subdirectory(git)
 add_subdirectory(core)
 add_subdirectory(protobuf)
 add_subdirectory(amun)

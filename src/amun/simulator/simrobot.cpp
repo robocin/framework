@@ -523,7 +523,7 @@ robot::RadioResponse SimRobot::setCommand(const sslsim::RobotCommand &command, S
     return response;
 }
 
-void SimRobot::update(SSL_DetectionRobot *robot, float stddev_p, float stddev_phi, qint64 time)
+void SimRobot::update(SSL_DetectionRobot *robot, float stddev_p, float stddev_phi, qint64 time, btVector3 positionOffset)
 {
     // setup vision packet
     robot->set_robot_id(m_specs.id());
@@ -534,7 +534,7 @@ void SimRobot::update(SSL_DetectionRobot *robot, float stddev_p, float stddev_ph
     // add noise
     btTransform transform;
     m_motionState->getWorldTransform(transform);
-    const btVector3 p = transform.getOrigin() / SIMULATOR_SCALE;
+    const btVector3 p = transform.getOrigin() / SIMULATOR_SCALE + positionOffset;
     const Vector p_noise = m_rng->normalVector(stddev_p);
     robot->set_x((p.y() + p_noise.x) * 1000.0f);
     robot->set_y(-(p.x() + p_noise.y) * 1000.0f);
@@ -546,7 +546,7 @@ void SimRobot::update(SSL_DetectionRobot *robot, float stddev_p, float stddev_ph
     m_lastSendTime = time;
 }
 
-void SimRobot::update(world::SimRobot* robot) const
+void SimRobot::update(world::SimRobot* robot, SimBall *ball) const
 {
     btTransform transform;
     m_motionState->getWorldTransform(transform);
@@ -572,6 +572,21 @@ void SimRobot::update(world::SimRobot* robot) const
     robot->set_r_x(angular.x());
     robot->set_r_y(angular.y());
     robot->set_r_z(angular.z());
+
+    bool ballTouchesRobot = false;
+    int numManifolds = m_world->getDispatcher()->getNumManifolds();
+    for (int i = 0; i < numManifolds; ++i) {
+        btPersistentManifold *contactManifold = m_world->getDispatcher()->getManifoldByIndexInternal(i);
+        btCollisionObject *objectA = (btCollisionObject*)(contactManifold->getBody0());
+        btCollisionObject *objectB = (btCollisionObject*)(contactManifold->getBody1());
+        if ((objectA == m_dribblerBody && objectB == ball->body())
+                || (objectA == ball->body() && objectB == m_dribblerBody)
+                || (objectA == m_body && objectB == ball->body())
+                || (objectA == ball->body() && objectB == m_body)) {
+            ballTouchesRobot = true;
+        }
+    }
+    robot->set_touches_ball(ballTouchesRobot);
 }
 
 void SimRobot::restoreState(const world::SimRobot &robot)

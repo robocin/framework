@@ -29,13 +29,14 @@
 #include "protobuf/world.pb.h"
 
 class FlyFilter;
-class GroundFilter;
+class BallGroundCollisionFilter;
 class DribbleFilter;
 
 class BallTracker : public Filter
 {
 public:
-    BallTracker(const SSL_DetectionBall &ball, qint64 last_time, qint32 primaryCamera, CameraInfo* cameraInfo, RobotInfo robotInfo, qint64 visionProcessingDelay);
+    BallTracker(const SSL_DetectionBall &ball, qint64 last_time, qint32 primaryCamera, CameraInfo* cameraInfo,
+                RobotInfo robotInfo, qint64 visionProcessingDelay, const FieldTransform &transform);
     BallTracker(const BallTracker& previousFilter, qint32 primaryCamera);
     ~BallTracker() override;
     BallTracker(const BallTracker&) = delete;
@@ -44,7 +45,7 @@ public:
 public:
     void update(qint64 time);
     void updateConfidence();
-    void get(world::Ball *ball, const FieldTransform &transform, bool resetRaw); // writes to world state
+    void get(world::Ball *ball, const FieldTransform &transform, bool resetRaw, const QVector<RobotInfo> &robots); // writes to world state
     void addVisionFrame(const SSL_DetectionBall& ball, qint64 time, qint32 cameraId, RobotInfo robotInfo, qint64 visionProcessingDelay);
     bool acceptDetection(const SSL_DetectionBall& ball, qint64 time, qint32 cameraId, RobotInfo robotInfo, qint64 visionProcessingDelay);
     void calcDistToCamera(bool flying);
@@ -53,7 +54,8 @@ public:
     qint64 initTime() const { return m_initTime; }
     bool isShot() const;
     double confidence() const { return m_confidence; }
-    int rawBallCount() const { return m_rawBallCount; } // basically reports the age of the filter in the number of accepted raw ball detections
+    bool isFeasiblyInvisible() const;
+
 #ifdef ENABLE_TRACKING_DEBUG
     const amun::DebugValues &debugValues() const { return m_debug; }
     void clearDebugValues() {
@@ -66,9 +68,8 @@ public:
 
 private:  
     qint64 m_lastUpdateTime;
-    GroundFilter* m_groundFilter;
+    BallGroundCollisionFilter* m_groundFilter;
     FlyFilter *m_flyFilter;
-    DribbleFilter *m_dribbleFilter;
     QList<VisionFrame> m_visionFrames;
     QList<VisionFrame> m_rawMeasurements;
     CameraInfo* m_cameraInfo;
@@ -78,7 +79,6 @@ private:
     double m_confidence;
     int m_updateFrameCounter;
     float m_cachedDistToCamera;
-    int m_rawBallCount = 0;
 
 #ifdef ENABLE_TRACKING_DEBUG
     amun::DebugValues m_debug;

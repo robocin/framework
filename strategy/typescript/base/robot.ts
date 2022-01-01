@@ -23,6 +23,8 @@
 *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 **************************************************************************/
 
+import { accelerationsByTeam, RobotSpecs } from "base/accelerations";
+import { throwInDebug } from "base/amun";
 import * as Constants from "base/constants";
 import { Coordinates } from "base/coordinates";
 import * as MathUtil from "base/mathutil";
@@ -267,8 +269,9 @@ export class Robot implements RobotState {
 		// debug.set("latencyCompensation", latencyCompensation)
 		// debug.set("offset", offset)
 
+		const offsetHysteresis = this._hasBall[sideOffset] ? this.dribblerWidth / 4 : 0;
 		// if too far to the sides
-		if (offset > this.dribblerWidth / 2 + sideOffset) {
+		if (offset > this.dribblerWidth / 2 + sideOffset + offsetHysteresis) {
 			// reset hystersis
 			this._hasBall[sideOffset] = false;
 			return false;
@@ -278,9 +281,21 @@ export class Robot implements RobotState {
 			return false;
 		}
 
+		const latencyXHysteresis = this._hasBall[sideOffset] ? latencyCompensation.x / 2 : 0;
+
 		this._hasBall[sideOffset] = relpos.x > this.shootRadius * (-1.5)
-					&&  relpos.x < latencyCompensation.x  &&  ball.posZ < Constants.maxRobotHeight * 1.2; // *1.2 to compensate for vision error
+					&&  relpos.x < latencyCompensation.x + latencyXHysteresis &&  ball.posZ < Constants.maxRobotHeight * 1.2; // *1.2 to compensate for vision error
 		return this._hasBall[sideOffset];
+	}
+
+	updateSpecs(teamname: string) {
+		let accel = accelerationsByTeam[teamname];
+		if (accelerationsByTeam[teamname]) {
+			this.maxSpeed = accel.vmax;
+			this.maxAngularSpeed = accel.vangular;
+			this.acceleration = accel.profile;
+			amun.log("updated specs with team " + teamname);
+		}
 	}
 }
 
@@ -312,6 +327,8 @@ export class FriendlyRobot extends Robot {
 	private _standbyTimer: number = -1;
 	private _standbyTick: boolean = false;
 	private _controllerInput: ControllerInput | {} = {};
+
+	private _dribblerSpeedVisualized = false;
 
 	constructor(specs: pb.robot.Specs) {
 		super(specs.id);
@@ -419,6 +436,7 @@ export class FriendlyRobot extends Robot {
 		// bypass override check in setControllerInput
 		this._controllerInput = {}; // halt robot by default
 		this.shootDisable(); // disable shoot
+		this._dribblerSpeedVisualized = false;
 		this.setDribblerSpeed(0); // stop dribbler
 		this.setStandby(false); // activate robot
 
@@ -494,6 +512,18 @@ export class FriendlyRobot extends Robot {
 	 * @param speed - robotspecific value between 0 and 1 (0 = off, 1 = on)
 	 */
 	setDribblerSpeed(speed: number) {
+		if (speed === 0 && this._dribblerSpeedVisualized) {
+			throwInDebug("Trying to reset dribbler speed after already setting it. The visualization will be wrong");
+		}
+
+		if (speed > 0 && !this._dribblerSpeedVisualized) {
+			this._dribblerSpeedVisualized = true;
+			vis.addCircle(
+				"b/robot: dribbler speed", this.pos, this.radius + 0.04,
+				vis.colors.magentaHalf, false, false, undefined, 0.03
+			);
+		}
+
 		this._dribblerSpeed = speed;
 	}
 

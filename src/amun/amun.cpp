@@ -188,6 +188,7 @@ void Amun::start()
         connect(this, &Amun::gotRefereeHost, m_gameControllerConnection[i].get(), &GameControllerConnection::handleRefereeHost);
         connect(this, &Amun::useInternalGameController, m_gameControllerConnection[i].get(), &GameControllerConnection::switchInternalGameController);
         connect(this, &Amun::useInternalGameController, m_processor->getInternalGameController(), &SSLGameController::setEnabled);
+        connect(this, &Amun::gotCommandForGC, m_processor->getInternalGameController(), &SSLGameController::handleCommand);
 
         Q_ASSERT(m_strategy[i] == nullptr);
         m_strategy[i] = new Strategy(m_timer, strategy, m_debugHelper[i], &m_compilerRegistry, m_gameControllerConnection[i], i == 2, false, m_pathInputSaver);
@@ -467,6 +468,8 @@ void Amun::handleCommandLocally(const Command &command)
         }
         // send out even if it does not change, since the default value may vary between objects (GC)
         emit useInternalGameController(internalAutoref);
+
+        emit gotCommandForGC(referee);
     }
 
     if (command->has_replay()) {
@@ -568,8 +571,15 @@ void Amun::handleStatus(const Status &status)
 
 void Amun::handleStatusForReplay(const Status &status)
 {
+    const auto previousTime = m_replayTimer->currentTime();
     m_replayTimer->setTime(status->time(), 0);
     if (m_trackingReplay) {
+        if (status->has_game_state()) {
+            m_lastTrackingReplayGameState = status;
+        }
+        if (previousTime > status->time()) {
+            m_replayProcessor->resetTracking();
+        }
         if (status->has_team_blue()) {
             Command command(new amun::Command);
             command->mutable_set_team_blue()->CopyFrom(status->team_blue());
@@ -622,6 +632,12 @@ void Amun::handleStatusForReplay(const Status &status)
                     m_replayProcessor->handleVisionPacket(visionData, time, "replay");
                 }
             }
+            for (const auto &truth : status->world_state().reality()) {
+                QByteArray simulatorData(truth.ByteSize(), 0);
+                if (truth.SerializeToArray(simulatorData.data(), simulatorData.size())) {
+                    m_replayProcessor->handleSimulatorExtraVision(simulatorData);
+                }
+            }
             m_replayProcessor->process(status->world_state().time());
         }
     } else {
@@ -632,6 +648,10 @@ void Amun::handleStatusForReplay(const Status &status)
 void Amun::handleReplayStatus(const Status &status)
 {
     status->set_time(m_replayTimer->currentTime());
+    if (m_trackingReplay && !m_lastTrackingReplayGameState.isNull()) {
+        // add game state information since the replay processor does not have the required data
+        status->mutable_game_state()->CopyFrom(m_lastTrackingReplayGameState->game_state());
+    }
     m_seshat->handleReplayStatus(status);
 }
 

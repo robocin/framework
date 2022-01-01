@@ -119,6 +119,7 @@ FieldWidget::FieldWidget(QWidget *parent) :
     m_geometryUpdated(true),
     m_usingVirtualField(false),
     m_rotation(0.0f),
+    m_drawScenes(1),
     m_visualizationsUpdated(false),
     m_infoTextUpdated(false),
     m_hasTouchInput(false),
@@ -138,7 +139,7 @@ FieldWidget::FieldWidget(QWidget *parent) :
     connect(m_guiTimer, &GuiTimer::timeout, this, &FieldWidget::updateAll);
     m_guiTimer->requestTriggering();
 
-    geometrySetDefault(&m_geometry);
+    geometrySetDefault(&m_drawScenes[m_currentScene].geometry);
     geometrySetDefault(&m_virtualFieldGeometry);
 
     setAcceptDrops(true);
@@ -154,10 +155,10 @@ FieldWidget::FieldWidget(QWidget *parent) :
     m_contextMenu->addSeparator();
     // add actions to allow hiding visualizations of a team
     QList<QAction**> visualizationActions {&m_actionShowBlueVis, &m_actionShowBlueReplayVis, &m_actionShowYellowVis,
-                                         &m_actionShowYellowReplayVis, &m_actionShowControllerVis};
+                                         &m_actionShowYellowReplayVis, &m_actionShowOtherVis};
     QList<QString> actionNames {"Show blue visualizations", "Show blue replay visualizations",
                                "Show yellow visualizations", "Show yellow replay visualizations",
-                               "Show controller visualizations"};
+                               "Show other visualizations"};
     for (int i = 0;i<visualizationActions.size();i++) {
         QAction * action = m_contextMenu->addAction(actionNames[i]);
         action->setCheckable(true);
@@ -218,7 +219,7 @@ FieldWidget::FieldWidget(QWidget *parent) :
 
     QSignalMapper *saveSituationMapper = new QSignalMapper(saveSituationTsMenu);
     connect(actionSaveSituationTsAutoref, SIGNAL(triggered()), saveSituationMapper, SLOT(map()));
-    saveSituationMapper->setMapping(actionSaveSituationTsAutoref, static_cast<int>(TrackingFrom::REFEREE));
+    saveSituationMapper->setMapping(actionSaveSituationTsAutoref, static_cast<int>(TrackingFrom::AUTOREF));
     connect(actionSaveSituationTsBlue, SIGNAL(triggered()), saveSituationMapper, SLOT(map()));
     saveSituationMapper->setMapping(actionSaveSituationTsBlue, static_cast<int>(TrackingFrom::BLUE));
     connect(actionSaveSituationTsYellow, SIGNAL(triggered()), saveSituationMapper, SLOT(map()));
@@ -236,8 +237,8 @@ FieldWidget::FieldWidget(QWidget *parent) :
     trackingFromMenu->setToolTip("Changes point of view of the robot position tracking.");
     m_contextMenu->setToolTipsVisible(true);
 
-    QAction *actionTrackingFromBoth = trackingFromMenu->addAction("Both");
-    actionTrackingFromBoth->setCheckable(true);
+    QAction *actionTrackingFromRa = trackingFromMenu->addAction("Ra");
+    actionTrackingFromRa->setCheckable(true);
 
     QAction *actionTrackingFromRef = trackingFromMenu->addAction("Autoref");
     actionTrackingFromRef->setCheckable(true);
@@ -252,10 +253,10 @@ FieldWidget::FieldWidget(QWidget *parent) :
     actionTrackingFromNone->setCheckable(true);
 
     QSignalMapper *trackingMapper = new QSignalMapper(m_contextMenu);
-    connect(actionTrackingFromBoth, SIGNAL(triggered()), trackingMapper, SLOT(map()));
-    trackingMapper->setMapping(actionTrackingFromBoth, static_cast<int>(TrackingFrom::BOTH));
+    connect(actionTrackingFromRa, SIGNAL(triggered()), trackingMapper, SLOT(map()));
+    trackingMapper->setMapping(actionTrackingFromRa, static_cast<int>(TrackingFrom::RA));
     connect(actionTrackingFromRef, SIGNAL(triggered()), trackingMapper, SLOT(map()));
-    trackingMapper->setMapping(actionTrackingFromRef, static_cast<int>(TrackingFrom::REFEREE));
+    trackingMapper->setMapping(actionTrackingFromRef, static_cast<int>(TrackingFrom::AUTOREF));
     connect(actionTrackingFromYellow, SIGNAL(triggered()), trackingMapper, SLOT(map()));
     trackingMapper->setMapping(actionTrackingFromYellow, static_cast<int>(TrackingFrom::YELLOW));
     connect(actionTrackingFromBlue, SIGNAL(triggered()), trackingMapper, SLOT(map()));
@@ -267,14 +268,14 @@ FieldWidget::FieldWidget(QWidget *parent) :
 
     QActionGroup *trackingGroup = new QActionGroup(trackingFromMenu);
     trackingGroup->setExclusive(true);
-    trackingGroup->addAction(actionTrackingFromBoth);
+    trackingGroup->addAction(actionTrackingFromRa);
     trackingGroup->addAction(actionTrackingFromRef);
     trackingGroup->addAction(actionTrackingFromYellow);
     trackingGroup->addAction(actionTrackingFromBlue);
     trackingGroup->addAction(actionTrackingFromNone);
 
-    m_trackingFrom = TrackingFrom::BOTH;
-    actionTrackingFromBoth->setChecked(true);
+    m_trackingFrom = TrackingFrom::RA;
+    actionTrackingFromRa->setChecked(true);
 
     m_actionShowVision = m_contextMenu->addAction("Show vision");
     m_actionShowVision->setCheckable(true);
@@ -395,16 +396,25 @@ void FieldWidget::addToggleVisAction()
     addAction(actionToggleVisualizations);
 }
 
+void FieldWidget::internalRefereeEnabled(bool enabled)
+{
+    m_internalRefereeEnabled = enabled;
+    m_actionBallPlacementBlue->setVisible(!m_isLogplayer && m_internalRefereeEnabled);
+    m_actionBallPlacementYellow->setVisible(!m_isLogplayer && m_internalRefereeEnabled);
+}
+
 void FieldWidget::setHorusMode(bool enable)
 {
     m_isLogplayer = enable;
-    m_actionBallPlacementBlue->setVisible(!enable);
-    m_actionBallPlacementYellow->setVisible(!enable);
+    m_actionBallPlacementBlue->setVisible(!m_isLogplayer && m_internalRefereeEnabled);
+    m_actionBallPlacementYellow->setVisible(!m_isLogplayer && m_internalRefereeEnabled);
     m_actionShowBlueReplayVis->setVisible(enable);
     m_actionShowYellowReplayVis->setVisible(enable);
     if (!m_isLogplayer) {
         m_actionRestoreSimulatorState->setVisible(false);
     }
+
+    switchScene(enable ? 1 : 0);
 }
 
 void FieldWidget::toggleStrategyVisualizations()
@@ -419,10 +429,26 @@ void FieldWidget::toggleStrategyVisualizations()
 
 void FieldWidget::handleStatus(const Status &status)
 {
-    if (status->has_world_state()) {
+    const bool hasRa = status->has_world_state() && (m_trackingFrom == TrackingFrom::RA || m_trackingFrom == TrackingFrom::NONE);
+    const bool hasBlue = status->has_execution_state() && (m_trackingFrom == TrackingFrom::BLUE && status->has_blue_running());
+    const bool hasYellow = status->has_execution_state() && (m_trackingFrom == TrackingFrom::YELLOW && status->has_yellow_running());
+    const bool hasAutoref = status->has_execution_state() && (m_trackingFrom == TrackingFrom::AUTOREF && status->has_autoref_running());
+    if (hasRa || hasBlue || hasYellow || hasAutoref) {
         m_worldState.append(status);
-        m_lastWorldState = status;
         m_guiTimer->requestTriggering();
+    }
+    if (status->has_world_state()) {
+        m_drawScenes[m_currentScene].lastWorldState[TrackingFrom::RA] = status;
+        m_drawScenes[m_currentScene].lastWorldState[TrackingFrom::NONE] = status;
+    }
+    if (status->has_execution_state()) {
+        if (status->has_blue_running()) {
+            m_drawScenes[m_currentScene].lastWorldState[TrackingFrom::BLUE] = status;
+        } else if (status->has_yellow_running()) {
+            m_drawScenes[m_currentScene].lastWorldState[TrackingFrom::YELLOW] = status;
+        } else if (status->has_autoref_running()) {
+            m_drawScenes[m_currentScene].lastWorldState[TrackingFrom::AUTOREF] = status;
+        }
     }
 
     if (status->has_game_state()) {
@@ -457,7 +483,7 @@ void FieldWidget::handleStatus(const Status &status)
     }
 
     if (status->has_geometry() && !m_usingVirtualField) {
-        m_geometry.CopyFrom(status->geometry());
+        m_drawScenes[m_currentScene].geometry.CopyFrom(status->geometry());
         m_geometryUpdated = true;
         m_guiTimer->requestTriggering();
     }
@@ -469,13 +495,13 @@ void FieldWidget::handleStatus(const Status &status)
         }
         if (it.value() > 100) {
             it.value() = -1;
-            m_visualizations.remove(it.key());
+            m_drawScenes[m_currentScene].visualizations.remove(it.key());
             m_guiTimer->requestTriggering();
         }
     }
     for (const auto& debug: status->debug()) {
         // just save status to avoid copying the visualizations
-        m_visualizations[debug.source()] = status;
+        m_drawScenes[m_currentScene].visualizations[debug.source()] = status;
         m_debugSourceCounter[debug.source()] = 0;
         m_visualizationsUpdated = true;
         m_guiTimer->requestTriggering();
@@ -502,12 +528,12 @@ void FieldWidget::clearData()
     clearTraces();
 
     m_worldState.clear();
-    m_lastWorldState.clear();
+    m_drawScenes[m_currentScene].lastWorldState.clear();
 
-    m_visualizations.clear();
+    m_drawScenes[m_currentScene].visualizations.clear();
     m_visualizationsUpdated = true;
 
-    geometrySetDefault(&m_geometry);
+    geometrySetDefault(&m_drawScenes[m_currentScene].geometry);
     geometrySetDefault(&m_virtualFieldGeometry);
     m_geometryUpdated = true;
     m_guiTimer->requestTriggering();
@@ -517,7 +543,7 @@ void FieldWidget::hideVisualizationToggles()
 {
     m_actionShowBlueVis->setVisible(false);
     m_actionShowYellowVis->setVisible(false);
-    m_actionShowControllerVis->setVisible(false);
+    m_actionShowOtherVis->setVisible(false);
 }
 
 void FieldWidget::updateTeam(RobotMap &team, QHash<uint, robot::Specs> &specsMap, const robot::Team &specs) {
@@ -564,9 +590,16 @@ void FieldWidget::updateVisualizationVisibility()
     m_visibleVisSources[amun::ReplayBlue] = m_actionShowBlueReplayVis->isChecked();
     m_visibleVisSources[amun::StrategyYellow] = m_actionShowYellowVis->isChecked();
     m_visibleVisSources[amun::ReplayYellow] = m_actionShowYellowReplayVis->isChecked();
-    m_visibleVisSources[amun::Controller] = m_actionShowControllerVis->isChecked();
-    m_visibleVisSources[amun::Autoref] = true;
-    m_visibleVisSources[amun::Tracking] = true;
+
+    // use protobuf reflections so that no source is missing when they are added in the future
+    const QVector<amun::DebugSource> explicitSources = {amun::StrategyBlue, amun::ReplayBlue, amun::StrategyYellow, amun::ReplayYellow};
+    const auto debugSources = amun::DebugSource_descriptor();
+    for (int i = 0;i<debugSources->value_count();i++) {
+        const amun::DebugSource source = static_cast<amun::DebugSource>(debugSources->value(i)->number());
+        if (!explicitSources.contains(source)) {
+            m_visibleVisSources[source] = m_actionShowOtherVis->isChecked();
+        }
+    }
 
     m_visualizationsUpdated = true;
     m_guiTimer->requestTriggering();
@@ -594,7 +627,7 @@ void FieldWidget::updateVisualizations()
     qDeleteAll(m_visualizationItems);
     m_visualizationItems.clear();
 
-    foreach (const Status &v, m_visualizations) {
+    foreach (const Status &v, m_drawScenes[m_currentScene].visualizations) {
         for (const auto& debug: v->debug()) {
             if (m_visibleVisSources.value(debug.source())) {
                 updateVisualizations(debug);
@@ -846,7 +879,8 @@ void FieldWidget::updateDetection()
         if (m_worldState[k].isNull()) {
             continue;
         }
-        const world::State &worldState = m_worldState[k]->world_state();
+        const bool useExecutionState = m_trackingFrom == TrackingFrom::BLUE || m_trackingFrom == TrackingFrom::YELLOW || m_trackingFrom == TrackingFrom::AUTOREF;
+        const world::State &worldState = useExecutionState ? m_worldState[k]->execution_state() : m_worldState[k]->world_state();
         const bool isLast = (k == (m_worldState.size() - 1));
 
         // pre-clean all traces, independent of existence of ball / robot
@@ -868,9 +902,8 @@ void FieldWidget::updateDetection()
             }
 
             // update the individual robots
-            bool useSimpleBlueTracking = worldState.simple_tracking_blue_size() > 0 && (m_trackingFrom == TrackingFrom::REFEREE || m_trackingFrom == TrackingFrom::YELLOW);
             for (int i = 0; i < worldState.blue_size(); i++) {
-                const world::Robot &robot = useSimpleBlueTracking ? worldState.simple_tracking_blue(i) : worldState.blue(i);
+                const world::Robot &robot = worldState.blue(i);
                 const robot::Specs &specs = m_teamBlue[robot.id()];
                 if (isLast) {
                     setRobot(robot, specs, m_robotsBlue, Qt::blue);
@@ -878,9 +911,8 @@ void FieldWidget::updateDetection()
                 addRobotTrace(worldState.time(), robot, m_robotBlueTrace, m_robotBlueRawTrace);
             }
 
-            bool useSimpleYellowTracking = worldState.simple_tracking_yellow_size() > 0 && (m_trackingFrom == TrackingFrom::REFEREE || m_trackingFrom == TrackingFrom::BLUE);
             for (int i = 0; i < worldState.yellow_size(); i++) {
-                const world::Robot &robot = useSimpleYellowTracking ? worldState.simple_tracking_yellow(i) : worldState.yellow(i);
+                const world::Robot &robot = worldState.yellow(i);
                 const robot::Specs &specs = m_teamYellow[robot.id()];
                 if (isLast) {
                     setRobot(robot, specs, m_robotsYellow, Qt::yellow);
@@ -1302,7 +1334,7 @@ void FieldWidget::addRobotTrace(qint64 time, const world::Robot &robot, Trace &r
 
 void FieldWidget::updateGeometry()
 {
-    const world::Geometry &g = m_usingVirtualField ? m_virtualFieldGeometry : m_geometry;
+    const world::Geometry &g = m_usingVirtualField ? m_virtualFieldGeometry : m_drawScenes[m_currentScene].geometry;
     if (!g.IsInitialized() || !m_geometryUpdated) {
         return;
     }
@@ -1332,6 +1364,8 @@ void FieldWidget::updateGeometry()
         // allow showing a small area around the field
         setSceneRect(rect.adjusted(-2, -2, 2, 2));
         showWholeField();
+
+        createInfoText();
     }
 }
 
@@ -1365,7 +1399,7 @@ void FieldWidget::setFieldOrientation(float rotation)
     clear(m_realRobotsYellow);
 
     // recreate robots on redraw
-    m_worldState.append(m_lastWorldState);
+    m_worldState.append(m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]);
     m_guiTimer->requestTriggering();
 }
 
@@ -1418,7 +1452,7 @@ void FieldWidget::virtualFieldSetupDialog()
 {
     VirtualFieldSetupDialog dialog(*m_virtualFieldConfiguration, this);
     dialog.exec();
-    auto config = new VirtualFieldConfiguration(dialog.getResult(m_geometry));
+    auto config = new VirtualFieldConfiguration(dialog.getResult(m_drawScenes[m_currentScene].geometry));
     m_virtualFieldConfiguration.reset(config);
     m_usingVirtualField = m_virtualFieldConfiguration->enabled;
     m_virtualFieldGeometry.CopyFrom(m_virtualFieldConfiguration->geometry);
@@ -1445,7 +1479,7 @@ void FieldWidget::virtualFieldSetupDialog()
 
 void FieldWidget::resizeAOI(QPointF pos)
 {
-    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_geometry;
+    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_drawScenes[m_currentScene].geometry;
     if (geometry.IsInitialized()) {
         double offset = geometry.boundary_width() + 0.1f;
         double limitX = geometry.field_width() / 2 + offset;
@@ -1588,10 +1622,11 @@ void FieldWidget::dropEvent(QDropEvent *event)
 {
     const QMimeData* mimeData = event->mimeData();
 
-    if (mimeData->hasUrls() && m_isLogplayer) {
+    if (mimeData->hasUrls()) {
         QList<QUrl> urlList = mimeData->urls();
         if (urlList.size() > 0) {
             emit fileDropped(urlList.at(0).toLocalFile());
+            event->acceptProposedAction();
         }
     }
 }
@@ -1942,7 +1977,7 @@ bool FieldWidget::viewportEvent(QEvent *event)
 
 void FieldWidget::drawBackground(QPainter *painter, const QRectF &rect)
 {
-    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_geometry;
+    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_drawScenes[m_currentScene].geometry;
     painter->save();
 
     QRectF rect1;
@@ -1984,7 +2019,7 @@ void FieldWidget::drawBackground(QPainter *painter, const QRectF &rect)
 
 void FieldWidget::drawLines(QPainter *painter, QRectF rect, bool cosmetic)
 {
-    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_geometry;
+    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_drawScenes[m_currentScene].geometry;
     const float lw = geometry.line_width();
     const float lwh = lw / 2.0f;
 
@@ -2071,7 +2106,7 @@ void FieldWidget::drawLines(QPainter *painter, QRectF rect, bool cosmetic)
 
 void FieldWidget::drawGoal(QPainter *painter, float side, bool cosmetic)
 {
-    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_geometry;
+    const world::Geometry &geometry = m_usingVirtualField ? m_virtualFieldGeometry : m_drawScenes[m_currentScene].geometry;
     QPainterPath path;
 
     const float d = cosmetic ? 0 : geometry.goal_wall_width() / 2.0f;
@@ -2155,19 +2190,24 @@ void FieldWidget::takeScreenshot()
 
 void FieldWidget::saveSituationLua()
 {
-    if (m_lastWorldState.isNull()) {
+    const Status &status = m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom];
+    if (status.isNull()) {
         return;
     }
-    ::saveSituation(m_lastWorldState->world_state(), m_gameState);
+    const world::State& worldState = status->has_execution_state() ? status->execution_state() : status->world_state();
+    ::saveSituation(worldState, m_gameState);
 }
 
 void FieldWidget::saveSituationTypescript(int trackingFromInt)
 {
-    if (m_lastWorldState.isNull()) {
+    auto trackingFrom = static_cast<TrackingFrom>(trackingFromInt);
+    const Status &status = m_drawScenes[m_currentScene].lastWorldState[trackingFrom];
+    if (status.isNull()) {
         return;
     }
-    auto trackingFrom = static_cast<TrackingFrom>(trackingFromInt);
-    ::saveSituationTypescript(trackingFrom, m_lastWorldState->world_state(), m_gameState, m_geometry, m_teamBlue, m_teamYellow);
+    const world::State& worldState = status->has_execution_state() ? status->execution_state() : status->world_state();
+    const amun::GameState gameState = status->has_execution_game_state() ? status->execution_game_state() : m_gameState;
+    ::saveSituationTypescript(trackingFrom, worldState, gameState, m_drawScenes[m_currentScene].geometry, m_teamBlue, m_teamYellow);
 }
 
 void FieldWidget::restoreSituation()
@@ -2227,20 +2267,42 @@ void FieldWidget::Robot::show()
 void FieldWidget::setTrackingFrom(int newViewPoint)
 {
     m_trackingFrom = static_cast<TrackingFrom>(newViewPoint);
-    m_worldState.append(m_lastWorldState);
+    m_worldState.append(m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]);
     updateDetection();
 }
 
 void FieldWidget::setShowVision(bool enable)
 {
     m_showVision = enable;
-    m_worldState.append(m_lastWorldState);
+    m_worldState.append(m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]);
     updateDetection();
 }
 
 void FieldWidget::setShowTruth(bool enable)
 {
     m_showTruth = enable;
-    m_worldState.append(m_lastWorldState);
+    m_worldState.append(m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]);
     updateDetection();
+}
+
+void FieldWidget::switchScene(int scene)
+{
+    while (scene >= m_drawScenes.size()) {
+        m_drawScenes.resize(m_drawScenes.size() + 1);
+        geometrySetDefault(&m_drawScenes.back().geometry);
+    }
+    m_currentScene = scene;
+
+    m_geometryUpdated = true;
+    updateGeometry();
+
+    m_visualizationsUpdated = true;
+    updateVisualizations();
+
+    if (!m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom].isNull()
+            && (m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]->has_world_state()
+                || m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]->has_execution_state())) {
+        m_worldState.append(m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]);
+        updateDetection();
+    }
 }

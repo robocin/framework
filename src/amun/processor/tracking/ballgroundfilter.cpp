@@ -23,15 +23,10 @@
 
 // TODO maybe exclude z axis from kalman filter
 
-GroundFilter::GroundFilter(const VisionFrame& frame, CameraInfo* cameraInfo) :
-    AbstractBallFilter(frame, cameraInfo),
-    m_lastUpdate(frame.time)
+GroundFilter::GroundFilter(const VisionFrame& frame, CameraInfo* cameraInfo, const FieldTransform &transform) :
+    AbstractBallFilter(frame, cameraInfo, transform)
 {
-    Kalman::Vector x(Kalman::Vector::Zero());
-    x(0) = frame.x;
-    x(1) = frame.y;
-    m_kalman = new Kalman(x);
-    m_kalman->H = Kalman::MatrixM::Identity();
+    reset(frame);
 }
 
 GroundFilter::GroundFilter(const GroundFilter& groundFilter, qint32 primaryCamera) :
@@ -40,9 +35,14 @@ GroundFilter::GroundFilter(const GroundFilter& groundFilter, qint32 primaryCamer
     m_lastUpdate(groundFilter.m_lastUpdate)
 { }
 
-GroundFilter::~GroundFilter()
+void GroundFilter::reset(const VisionFrame& frame)
 {
-    delete m_kalman;
+    Kalman::Vector x(Kalman::Vector::Zero());
+    x(0) = frame.x;
+    x(1) = frame.y;
+    m_kalman.reset(new Kalman(x));
+    m_kalman->H = Kalman::MatrixM::Identity();
+    m_lastUpdate = frame.time;
 }
 
 void GroundFilter::predict(qint64 time)
@@ -196,7 +196,7 @@ float GroundFilter::distanceTo(Eigen::Vector2f objPos)
 //}
 
 
-void GroundFilter::writeBallState(world::Ball *ball, qint64 time)
+void GroundFilter::writeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &)
 {
     predict(time);
 

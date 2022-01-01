@@ -21,6 +21,7 @@
 #include "typescriptcompiler.h"
 
 #include "strategy/script/filewatcher.h"
+#include "protobuftypings.h"
 
 #include <QDateTime>
 #include <QDirIterator>
@@ -29,6 +30,8 @@
 #include <QtGlobal>
 #include <utility>
 #include <QDebug>
+#include <QDateTime>
+#include <fstream>
 
 TypescriptCompiler::TypescriptCompiler(const QFileInfo &tsconfig)
     : m_tsconfig(tsconfig), m_state(State::STANDBY)
@@ -129,6 +132,16 @@ static bool copyDirectory(const QString &source, const QString &destination)
 
 void TypescriptCompiler::doCompile()
 {
+    QFileInfo baseProto { m_tsconfig.dir().filePath("base/protobuf.ts") };
+    if (shouldGenerateProtobufTypings(baseProto)) {
+        std::ofstream baseProtoStream { baseProto.absoluteFilePath().toStdString() };
+        if (!baseProtoStream.is_open()) {
+            emit error("Could not open base/protobuf.ts for writing");
+            return;
+        }
+        generateProtobufTypings(baseProtoStream);
+    }
+
     QDateTime lastStrategyModification = lastModifications().first;
 
     emit started();
@@ -221,6 +234,10 @@ bool TypescriptCompiler::isCompilationNeeded()
 {
     QFileInfo buildDir(m_tsconfig.dir().absolutePath() + "/built/built");
     if (!buildDir.exists()) {
+        return true;
+    }
+
+    if (shouldGenerateProtobufTypings(m_tsconfig.dir().filePath("base/protobuf.ts"))) {
         return true;
     }
 

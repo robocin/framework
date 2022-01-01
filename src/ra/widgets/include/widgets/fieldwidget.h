@@ -36,7 +36,7 @@ class QMenu;
 class QGestureEvent;
 struct VirtualFieldConfiguration;
 
-enum class TrackingFrom{BOTH, REFEREE, YELLOW, BLUE, NONE};
+enum class TrackingFrom{RA, AUTOREF, YELLOW, BLUE, NONE};
 
 class FieldWidget : public QGraphicsView
 {
@@ -88,6 +88,13 @@ private:
 
     enum class RobotVisualisation{RA, SEE_THROUGH, VISION};
 
+    struct DrawScene {
+        QMap<TrackingFrom, Status> lastWorldState;
+        world::Geometry geometry;
+        // save status to avoid copying the debug values
+        QMap<int, Status> visualizations;
+    };
+
 public:
     explicit FieldWidget(QWidget *parent = nullptr);
     ~FieldWidget() override;
@@ -114,6 +121,7 @@ public slots:
     void enableDragMeasure(bool enable) { m_enableDragMeasure = enable; }
     void toggleStrategyVisualizations();
     void setRegularVisualizationsEnabled(bool blue, bool enabled);
+    void internalRefereeEnabled(bool enabled);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -186,6 +194,7 @@ private:
     QGraphicsItem* createCircle(const QPen &pen, const QBrush &brush, const amun::Visualization &vis);
     QGraphicsItem* createPolygon(const QPen &pen, const QBrush &brush, const amun::Visualization &vis);
     QGraphicsItem* createPath(const QPen &pen, const QBrush &brush, const amun::Visualization &vis);
+    void switchScene(int scene);
 
     void invalidateTraces(Trace &trace, TraceMap::iterator begin, TraceMap::iterator end);
     void invalidateTraces(Trace &trace, qint64 time);
@@ -208,7 +217,7 @@ private:
     QAction *m_actionShowBlueReplayVis;
     QAction *m_actionShowYellowVis;
     QAction *m_actionShowYellowReplayVis;
-    QAction *m_actionShowControllerVis;
+    QAction *m_actionShowOtherVis;
     QAction *m_actionShowBallTraces;
     QAction *m_actionShowRobotTraces;
     QAction *m_actionBallPlacementBlue;
@@ -220,7 +229,6 @@ private:
 
     std::string m_geometryString;
     bool m_geometryUpdated;
-    world::Geometry m_geometry;
     world::Geometry m_virtualFieldGeometry;
     bool m_usingVirtualField;
     float m_rotation;
@@ -234,10 +242,11 @@ private:
     QHash<uint, robot::Specs> m_teamBlue;
     QHash<uint, robot::Specs> m_teamYellow;
     QList<Status> m_worldState;
-    Status m_lastWorldState;
+
+    unsigned int m_currentScene = 0;
+    QVector<DrawScene> m_drawScenes;
+
     QMap<int, bool> m_visibleVisSources;
-    // save status to avoid copying the debug values
-    QMap<int, Status> m_visualizations;
     QMap<int, int> m_debugSourceCounter;
     bool m_visualizationsUpdated;
     amun::GameState m_gameState;
@@ -282,6 +291,7 @@ private:
     int m_dragId;
 
     bool m_isLogplayer;
+    bool m_internalRefereeEnabled = false;
     bool m_enableDragMeasure;
     bool m_flipped;
 

@@ -17,7 +17,7 @@ Certain features require additional libraries:
 - `libsdl2` >= `2.0.2` - Gamepad support
 - `libudev` - required for Gamepad support (only required if `libsdl2` is not available via the package manager)
 - `libqt5svg5-dev` - Required for taking SVG screenshots of the fieldwidget
-- `python2`, `python3` and `git` - Required to build V8
+- `python2` and `git` - Required to build V8
 
 ## Table Of Contents
 - [Note for Robocup 2021 participants](#note-for-robocup-2021-participants)
@@ -26,12 +26,13 @@ Certain features require additional libraries:
     * [Ubuntu 18.04/20.04](#ubuntu-18042004)
     * [Manjaro](#manjaro)
   * [Building V8 (optional)](#building-v8-optional-needed-for-javascript-support)
+    * [Building V8 inside Docker](#building-v8-inside-docker)
   * [Building Ra](#building-the-framework)
 - [Windows](#windows)
   * [Setup](#setup)
   * [Compiling](#compiling)
   * [Common problems](#common-problems)
-- [Mac OS X](#mac-os-x)
+- [macOS](#macos)
 
 ## Note for Robocup 2021 participants
 None of the additional libraries are required to use the simulator. You'll
@@ -65,14 +66,14 @@ source.
 ### Building V8 (optional, needed for Javascript support)
 Note, that this is **not required** for the simulator.
 
-To build V8, `git`, `python2` and `python3` are required to be executable
-commands. The package names are
+To build V8, `git` and `python2` are required to be executable commands.
+The package names are
 
 | Distribution       | Packages              |
 |--------------------|-----------------------|
-| Ubuntu 20.04       | `git python2 python3` |
-| Ubuntu 18.04       | `git python python3`  |
-| Manjaro            | `git python python2`  |
+| Ubuntu 20.04       | `git python2` |
+| Ubuntu 18.04       | `git python` |
+| Manjaro            | `git python2` |
 
 Also, the `python` command needs to be available and point to `python2`. On
 Ubuntu 18.04, this is already the case when installing these
@@ -90,6 +91,11 @@ Finally, run the following in the repository root directory
 ```
 $ libs/v8/build.sh
 ```
+
+#### Building V8 inside Docker
+You can also build V8 inside a Docker container and copy out the result. Take a
+look at [`data/docker/README.md`](data/docker/README.md).
+
 ### Building the Framework
 
 The recommended way of building a project with CMake is by doing an
@@ -199,27 +205,26 @@ the following steps:
 - Open the device manager and choose to manually select a driver for the transceiver.
   Then select the folder containing the `winusbcompat.inf`.
 
-## Mac OS X
-Get dependencies using [Homebrew](http://brew.sh):
-```
-brew install cmake git sdl2 protobuf libusb python@2
-```
-Install Xcode from the macOS App Store.
-Then run the following command to install the Command Line Developer Tools if prompted to do so.
+## macOS
+Homebrew requires Xcode and Command Line Utilities. 
+
+Install Xcode from the App Store, run it once and then install the utilities with:
 ```
 xcode-select --install
 ```
-Run Xcode once afterwards to ensure that everything gets setup. Starting Xcode may also be necessary after an update.
 
-Download Qt 5 from http://qt-project.org and install it.
-WARNING: **DO NOT** install `Qt 5.4.0-5.5.0`; `Qt 5.5.1` is ok
+Get dependencies using [Homebrew](http://brew.sh):
+
+```
+brew install cmake git sdl2 protobuf libusb python@2 qt@5
+```
 
 Build using:
 ```
 $ cd path/to/framework
 $ libs/v8/build.sh
 $ mkdir build-mac && cd build-mac
-$ cmake -DCMAKE_PREFIX_PATH=~/Qt/5.6/clang_64/lib/cmake -DCMAKE_BUILD_TYPE=Release ..
+$ cmake -DCMAKE_BUILD_TYPE=Release ..
 $ make
 ```
 

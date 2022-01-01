@@ -88,6 +88,8 @@ CombinedLogWriter::~CombinedLogWriter()
     if (m_logFile) {
         connect(m_logFile, &LogFileWriter::destroyed, m_logFileThread, &QThread::quit, Qt::DirectConnection);
         m_logFile->deleteLater();
+    } else if (m_logFileThread) {
+        m_logFileThread->quit();
     }
     if (m_logFileThread) {
         // is quit by deleting m_logFile
@@ -313,7 +315,8 @@ void CombinedLogWriter::sendIsLogging(bool log)
     Status s = Status::createArena();
     s->set_time(m_lastTime);
     amun::UiResponse* response = s->mutable_pure_ui_response();
-    response->set_is_logging(log);
+    response->mutable_logging_info()->set_is_logging(log);
+    response->mutable_logging_info()->set_is_replay_logger(m_isReplay);
     emit sendStatus(s);
 }
 

@@ -68,12 +68,12 @@ static bool isInAOI(float detectionX, float detectionY, const FieldTransform &tr
 
 void Tracker::reset()
 {
-    foreach (const QList<RobotFilter*>& list, m_robotFilterYellow) {
+    for (const QList<RobotFilter*>& list : m_robotFilterYellow) {
         qDeleteAll(list);
     }
     m_robotFilterYellow.clear();
 
-    foreach (const QList<RobotFilter*>& list, m_robotFilterBlue) {
+    for (const QList<RobotFilter*>& list : m_robotFilterBlue) {
         qDeleteAll(list);
     }
     m_robotFilterBlue.clear();
@@ -108,7 +108,7 @@ void Tracker::process(qint64 currentTime)
     invalidateRobots(m_robotFilterYellow, currentTime);
     invalidateRobots(m_robotFilterBlue, currentTime);
 
-    foreach (const Packet &p, m_visionPackets) {
+    for (const Packet &p : m_visionPackets) {
         SSL_WrapperPacket wrapper;
         if (!wrapper.ParseFromArray(p.data.data(), p.data.size())) {
             continue;
@@ -140,6 +140,8 @@ void Tracker::process(qint64 currentTime)
         if (sourceTime > m_timeToReset) {
             m_timeToReset = std::numeric_limits<qint64>::max();
             reset();
+            // reset clears out m_visionPackets, we can not continue in the loop
+            break;
         }
 
         // drop frames older than the current state
@@ -182,11 +184,11 @@ void Tracker::process(qint64 currentTime)
     m_visionPackets.clear();
 }
 
-template<class Filter> static Filter* bestFilter(QList<Filter*> &filters, int minFrameCount)
+static RobotFilter* bestFilter(QList<RobotFilter*> &filters, int minFrameCount)
 {
     // get first filter that has the minFrameCount and move it to the front
     // this is required to ensure a stable result
-    foreach (Filter* item, filters) {
+    for (RobotFilter* item : filters) {
         if (item->frameCounter() >= minFrameCount) {
             if (filters.first() != item) {
                 filters.removeOne(item);
@@ -195,7 +197,7 @@ template<class Filter> static Filter* bestFilter(QList<Filter*> &filters, int mi
             return item;
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 void Tracker::prioritizeBallFilters()
@@ -233,7 +235,7 @@ BallTracker* Tracker::bestBallFilter()
     qint64 oldestTime = 0;
     double bestConfidence = -1.0;
     for (BallTracker* f : m_ballFilter) {
-        if (f->rawBallCount() < MIN_RAW_DETECTIONS) {
+        if (f->frameCounter() < MIN_RAW_DETECTIONS) {
             continue;
         }
         double confidence = f->confidence() + (m_currentBallFilter == f ? CONFIDENCE_HYSTERESIS : 0.0);
@@ -270,6 +272,26 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
     worldState->set_has_vision_data(m_hasVisionData);
     worldState->set_system_delay(m_systemDelay);
 
+    QVector<RobotInfo> robotInfos;
+    robotInfos.reserve(m_robotFilterBlue.size() + m_robotFilterYellow.size());
+    for(RobotMap::iterator it = m_robotFilterYellow.begin(); it != m_robotFilterYellow.end(); ++it) {
+        RobotFilter *robot = bestFilter(*it, minFrameCount);
+        if (robot != nullptr) {
+            robot->update(currentTime);
+            robot->get(worldState->add_yellow(), *m_fieldTransform, false);
+            robotInfos.append(robot->getRobotInfo());
+        }
+    }
+
+    for(RobotMap::iterator it = m_robotFilterBlue.begin(); it != m_robotFilterBlue.end(); ++it) {
+        RobotFilter *robot = bestFilter(*it, minFrameCount);
+        if (robot != nullptr) {
+            robot->update(currentTime);
+            robot->get(worldState->add_blue(), *m_fieldTransform, false);
+            robotInfos.append(robot->getRobotInfo());
+        }
+    }
+
     if (!m_robotsOnly) {
         for (auto &data : m_detectionWrappers) {
             worldState->add_vision_frames()->CopyFrom(data.first);
@@ -279,26 +301,9 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
 
         BallTracker *ball = bestBallFilter();
 
-        if (ball != NULL) {
+        if (ball != nullptr) {
             ball->update(currentTime);
-            ball->get(worldState->mutable_ball(), *m_fieldTransform, resetRaw);
-        }
-    }
-
-
-    for(RobotMap::iterator it = m_robotFilterYellow.begin(); it != m_robotFilterYellow.end(); ++it) {
-        RobotFilter *robot = bestFilter(*it, minFrameCount);
-        if (robot != NULL) {
-            robot->update(currentTime);
-            robot->get(worldState->add_yellow(), *m_fieldTransform, false);
-        }
-    }
-
-    for(RobotMap::iterator it = m_robotFilterBlue.begin(); it != m_robotFilterBlue.end(); ++it) {
-        RobotFilter *robot = bestFilter(*it, minFrameCount);
-        if (robot != NULL) {
-            robot->update(currentTime);
-            robot->get(worldState->add_blue(), *m_fieldTransform, false);
+            ball->get(worldState->mutable_ball(), *m_fieldTransform, resetRaw, robotInfos);
         }
     }
 
@@ -372,15 +377,14 @@ void Tracker::updateCamera(const SSL_GeometryCameraCalibration &c, QString sende
     m_cameraInfo->cameraSender[c.camera_id()] = sender;
 }
 
-template<class Filter>
-void Tracker::invalidate(QList<Filter*> &filters, const qint64 maxTime, const qint64 maxTimeLast, qint64 currentTime)
+void Tracker::invalidateRobotFilter(QList<RobotFilter*> &filters, const qint64 maxTime, const qint64 maxTimeLast, qint64 currentTime)
 {
     const int minFrameCount = 5;
 
     // remove outdated filters
-    QMutableListIterator<Filter*> it(filters);
+    QMutableListIterator<RobotFilter*> it(filters);
     while (it.hasNext()) {
-        Filter *filter = it.next();
+        RobotFilter *filter = it.next();
         // last robot has more time, but only if it's visible yet
         const qint64 timeLimit = (filters.size() > 1 || filter->frameCounter() < minFrameCount) ? maxTime : maxTimeLast;
         if (filter->lastUpdate() + timeLimit < currentTime) {
@@ -396,8 +400,60 @@ void Tracker::invalidateBall(qint64 currentTime)
     const qint64 maxTimeBall = .1E9; // 0.1 s
     // Maximum tracking time for last ball
     const qint64 maxTimeLastBall = 1E9; // 1 s
+    // Maximum tracking time for a ball that is invisible but could still be dribbling
+    const qint64 maxTimeFeasibleBall = 10e9; // 10 s
+
     // remove outdated balls
-    invalidate(m_ballFilter, maxTimeBall, maxTimeLastBall, currentTime);
+    const int minFrameCount = 5;
+
+    int longLivingFilters = std::count_if(m_ballFilter.begin(), m_ballFilter.end(), [](const BallTracker *t) {
+        return t->frameCounter() >= 3;
+    });
+
+    // remove outdated filters
+    QList<BallTracker*> possibleRemovals;
+    QMutableListIterator<BallTracker*> it(m_ballFilter);
+    while (it.hasNext()) {
+        BallTracker *filter = it.next();
+        // last robot has more time, but only if it's visible yet
+        qint64 timeLimit;
+        if (filter->frameCounter() < minFrameCount) {
+            timeLimit = maxTimeBall;
+        } else if (longLivingFilters == 1 && filter->isFeasiblyInvisible()) {
+            timeLimit = maxTimeFeasibleBall;
+        } else if (longLivingFilters > 1) {
+            timeLimit = maxTimeBall;
+        } else {
+            timeLimit = maxTimeLastBall;
+        }
+        if (filter->lastUpdate() + timeLimit < currentTime) {
+            if (filter->frameCounter() < 3) {
+                delete filter;
+            } else {
+                possibleRemovals.append(filter);
+            }
+            it.remove();
+        }
+    }
+    if (possibleRemovals.size() > 0) {
+        std::sort(possibleRemovals.begin(), possibleRemovals.end(), [](BallTracker *f1, BallTracker *f2) {
+            if (f1->isFeasiblyInvisible() != f2->isFeasiblyInvisible()) {
+                return f1->isFeasiblyInvisible() > f2->isFeasiblyInvisible();
+            }
+            return f1->initTime() < f2->initTime();
+        });
+        // avoid collecting too many filters with a lot of balls/bad detections
+        while (possibleRemovals.size() > 5) {
+            BallTracker* toRemove = possibleRemovals.back();
+            possibleRemovals.pop_back();
+            delete toRemove;
+        }
+        // always remove at least one
+        BallTracker* toRemove = possibleRemovals.back();
+        possibleRemovals.pop_back();
+        delete toRemove;
+        m_ballFilter.append(possibleRemovals);
+    }
 }
 
 void Tracker::invalidateRobots(RobotMap &map, qint64 currentTime)
@@ -410,7 +466,7 @@ void Tracker::invalidateRobots(RobotMap &map, qint64 currentTime)
     // iterate over team
     for(RobotMap::iterator it = map.begin(); it != map.end(); ++it) {
         // remove outdated robots
-        invalidate(*it, maxTime, m_maxTimeLast, currentTime);
+        invalidateRobotFilter(*it, maxTime, m_maxTimeLast, currentTime);
     }
 }
 
@@ -425,14 +481,14 @@ QList<RobotFilter *> Tracker::getBestRobots(qint64 currentTime)
 
     for(RobotMap::iterator it = m_robotFilterYellow.begin(); it != m_robotFilterYellow.end(); ++it) {
         RobotFilter *robot = bestFilter(*it, minFrameCount);
-        if (robot != NULL) {
+        if (robot != nullptr) {
             robot->update(currentTime);
             filters.append(robot);
         }
     }
     for(RobotMap::iterator it = m_robotFilterBlue.begin(); it != m_robotFilterBlue.end(); ++it) {
         RobotFilter *robot = bestFilter(*it, minFrameCount);
-        if (robot != NULL) {
+        if (robot != nullptr) {
             robot->update(currentTime);
             filters.append(robot);
         }
@@ -472,7 +528,7 @@ void Tracker::trackBall(const SSL_DetectionBall &ball, qint64 receiveTime, quint
 
     bool acceptingFilterWithCamId = false;
     BallTracker *acceptingFilterWithOtherCamId = nullptr;
-    foreach (BallTracker *filter, m_ballFilter) {
+    for (BallTracker *filter : m_ballFilter) {
         filter->update(receiveTime);
         if (filter->acceptDetection(ball, receiveTime, cameraId, robotInfo, visionProcessingDelay)) {
             if (filter->primaryCamera() == cameraId) {
@@ -494,7 +550,7 @@ void Tracker::trackBall(const SSL_DetectionBall &ball, qint64 receiveTime, quint
             bt = new BallTracker(*acceptingFilterWithOtherCamId, cameraId);
         } else {
             // create new Ball Filter without initial movement
-            bt = new BallTracker(ball, receiveTime, cameraId, m_cameraInfo, robotInfo, visionProcessingDelay);
+            bt = new BallTracker(ball, receiveTime, cameraId, m_cameraInfo, robotInfo, visionProcessingDelay, *m_fieldTransform);
         }
         m_ballFilter.append(bt);
         bt->addVisionFrame(ball, receiveTime, cameraId, robotInfo, visionProcessingDelay);
@@ -521,10 +577,10 @@ void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qi
     // If no robot is closer than .5 m create a new Kalman Filter
 
     float nearest = 0.5;
-    RobotFilter *nearestFilter = NULL;
+    RobotFilter *nearestFilter = nullptr;
 
     QList<RobotFilter*>& list = robotMap[robot.robot_id()];
-    foreach (RobotFilter *filter, list) {
+    for (RobotFilter *filter : list) {
         filter->update(receiveTime);
         const float dist = filter->distanceTo(robot);
         if (dist < nearest) {
@@ -549,7 +605,7 @@ void Tracker::queuePacket(const QByteArray &packet, qint64 time, QString sender)
 
 void Tracker::queueRadioCommands(const QList<robot::RadioCommand> &radio_commands, qint64 time)
 {
-    foreach (const robot::RadioCommand &radioCommand, radio_commands) {
+    for (const robot::RadioCommand &radioCommand : radio_commands) {
         // skip commands for which the team is unknown
         if (!radioCommand.has_is_blue()) {
             continue;
@@ -558,7 +614,7 @@ void Tracker::queueRadioCommands(const QList<robot::RadioCommand> &radio_command
         // add radio responses to every available filter
         const RobotMap &teamMap = radioCommand.is_blue() ? m_robotFilterBlue : m_robotFilterYellow;
         const QList<RobotFilter*>& list = teamMap.value(radioCommand.id());
-        foreach (RobotFilter *filter, list) {
+        for (RobotFilter *filter : list) {
             filter->addRadioCommand(radioCommand.command(), time);
         }
     }

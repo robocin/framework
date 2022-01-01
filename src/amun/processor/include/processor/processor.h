@@ -51,13 +51,13 @@ public:
     Processor& operator=(const Processor&) = delete;
     bool getIsFlipped() const { return m_lastFlipped; }
     SSLGameController *getInternalGameController() const { return m_gameController; }
+    void resetTracking();
 
 signals:
     void sendStatus(const Status &status);
     void sendStrategyStatus(const Status &status);
     void sendRadioCommands(const QList<robot::RadioCommand> &commands, qint64 processingStart);
     void setFlipped(bool flipped);
-    void gotCommandForGC(const amun::CommandReferee &command);
 
 public slots:
     void setScaling(double scaling);
@@ -92,7 +92,8 @@ private:
     const world::Robot *getWorldRobot(const RobotList &robots, uint id);
     void injectExtraData(Status &status);
     void injectUserControl(Status &status, bool isBlue);
-    Status assembleStatus(qint64 time, bool resetRaw);
+    Status assembleStatus(Tracker &tracker, qint64 time, bool resetRaw);
+    world::WorldSource currentWorldSource() const;
 
     void sendTeams();
 
@@ -101,6 +102,7 @@ private:
     Referee *m_referee;
     Referee *m_refereeInternal;
     std::unique_ptr<Tracker> m_tracker;
+    std::unique_ptr<Tracker> m_strategyTracker;
     std::unique_ptr<Tracker> m_speedTracker;
     std::unique_ptr<Tracker> m_simpleTracker;
     QList<robot::RadioResponse> m_responses;
@@ -108,7 +110,7 @@ private:
     ssl::TeamPlan m_mixedTeamInfo;
     bool m_mixedTeamInfoSet;
     bool m_refereeInternalActive;
-    bool m_simulatorEnabled;
+    bool m_simulatorEnabled = false;
     bool m_internalSimulatorEnabled = false;
     bool m_externalSimulatorEnabled = false;
     bool m_lastFlipped;

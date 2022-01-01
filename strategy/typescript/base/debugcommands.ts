@@ -157,13 +157,13 @@ export function sendRefereeCommand(refereeCommand: string, gameStage?: string, b
  * @param friendlyRobots - friendly by id
  * @param opponentRobots - opponent robots by id
  */
-export type BallInfo = { pos: Vector, posZ: number, speed: Vector, speedZ: number };
+export type BallInfo = { pos: Vector, posZ?: number, speed: Vector, speedZ?: number };
 export function moveObjects(ball?: BallInfo, friendlyRobots?: RobotState[], opponentRobots?: RobotState[]) {
 	if (!amun.isDebug) {
 		throw new Error("only works in debug mode");
 	}
-	if (!World.IsSimulated) {
-		throw new Error("This can only be used in the simulator!");
+	if (World.WorldStateSource !== pb.world.WorldSource.INTERNAL_SIMULATION) {
+		throw new Error("This can only be used in the internal simulator!");
 	}
 
 	// teleport_robot gets initialized further down, because otherwise the typescript compiler is sad

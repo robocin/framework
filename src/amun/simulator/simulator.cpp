@@ -89,6 +89,7 @@ struct camun::simulator::SimulatorData
     float ballVisibilityThreshold;
     float cameraOverlap;
     float cameraPositionError;
+    float objectPositionOffset;
     float robotCommandPacketLoss;
     float robotReplyPacketLoss;
     float missingBallDetections;
@@ -161,6 +162,7 @@ Simulator::Simulator(const Timer *timer, const amun::SimulatorSetup &setup, bool
     m_data->ballVisibilityThreshold = 0.4;
     m_data->cameraOverlap = 0.3;
     m_data->cameraPositionError = 0;
+    m_data->objectPositionOffset = 0;
     m_data->robotCommandPacketLoss = 0;
     m_data->robotReplyPacketLoss = 0;
     m_data->missingBallDetections = 0;
@@ -382,6 +384,20 @@ void Simulator::initializeDetection(SSL_DetectionFrame *detection, std::size_t c
     detection->set_t_sent((m_time + m_visionDelay)*1E-9);
 }
 
+static btVector3 positionOffsetForCamera(float offsetStrength, btVector3 cameraPos)
+{
+    btVector3 cam2d{cameraPos.x(), cameraPos.y(), 0};
+    if (offsetStrength < 1e-9) {
+        // do not produce an offset that tiny
+        return {0, 0, 0};
+    }
+    if (cam2d.length() < offsetStrength ) {
+        // do not normalize a 0 vector
+        return cam2d;
+    }
+    return btVector3(cameraPos.x(), cameraPos.y(), 0).normalized() * offsetStrength;
+}
+
 std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket()
 {
     const std::size_t numCameras = m_data->reportedCameraSetup.size();
@@ -408,8 +424,9 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
             }
 
             // get ball position
+            const btVector3 positionOffset = positionOffsetForCamera(m_data->objectPositionOffset, m_data->cameraPositions[cameraId]);
             bool visible = m_data->ball->update(detections[cameraId].add_balls(), m_data->stddevBall, m_data->stddevBallArea, m_data->cameraPositions[cameraId],
-                    m_data->enableInvisibleBall, m_data->ballVisibilityThreshold);
+                    m_data->enableInvisibleBall, m_data->ballVisibilityThreshold, positionOffset);
             if (!visible) {
                 detections[cameraId].clear_balls();
             }
@@ -423,7 +440,7 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
         for (const auto& it : team) {
             SimRobot* robot = it.first;
             auto* robotProto = teamIsBlue ? simState.add_blue_robots() : simState.add_yellow_robots();
-            robot->update(robotProto);
+            robot->update(robotProto, m_data->ball);
 
             if (m_time - robot->getLastSendTime() >= m_minRobotDetectionTime) {
                 const float timeDiff = (m_time - robot->getLastSendTime()) * 1E-9;
@@ -436,10 +453,11 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
                         continue;
                     }
 
+                    const btVector3 positionOffset = positionOffsetForCamera(m_data->objectPositionOffset, m_data->cameraPositions[cameraId]);
                     if (teamIsBlue) {
-                        robot->update(detections[cameraId].add_robots_blue(), m_data->stddevRobot, m_data->stddevRobotPhi, m_time);
+                        robot->update(detections[cameraId].add_robots_blue(), m_data->stddevRobot, m_data->stddevRobotPhi, m_time, positionOffset);
                     } else {
-                        robot->update(detections[cameraId].add_robots_yellow(), m_data->stddevRobot, m_data->stddevRobotPhi, m_time);
+                        robot->update(detections[cameraId].add_robots_yellow(), m_data->stddevRobot, m_data->stddevRobotPhi, m_time, positionOffset);
                     }
 
 
@@ -449,7 +467,7 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
                     if (m_data->ballDetectionsAtDribbler > 0 && m_data->rng.uniformFloat(0, 1) < detectionProb) {
                         // always on the right side of the dribbler for now
                         if (!m_data->ball->addDetection(detections[cameraId].add_balls(), robot->dribblerCorner(false) / SIMULATOR_SCALE,
-                                                        m_data->stddevRobot, 0, m_data->cameraPositions[cameraId], false, 0)) {
+                                                        m_data->stddevRobot, 0, m_data->cameraPositions[cameraId], false, 0, positionOffset)) {
                             detections[cameraId].mutable_balls()->DeleteSubrange(detections[cameraId].balls_size()-1, 1);
                         }
                     }
@@ -467,7 +485,7 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
 
         // if multiple balls are reported, shuffle them randomly (the tracking might have systematic errors depending on the ball order)
         if (frame.balls_size() > 1) {
-            std::random_shuffle(frame.mutable_balls()->begin(), frame.mutable_balls()->end());
+            std::shuffle(frame.mutable_balls()->begin(), frame.mutable_balls()->end(), rand_shuffle_src);
         }
 
         SSL_WrapperPacket packet;
@@ -592,9 +610,11 @@ void Simulator::setTeam(Simulator::RobotMap &list, float side, const robot::Team
 void Simulator::moveBall(const sslsim::TeleportBall& ball)
 {
     // remove the dribbling constraint
-    for (const auto& robotList : {m_data->robotsBlue, m_data->robotsYellow}) {
-        for (const auto& it : robotList) {
-            it.first->stopDribbling();
+    if (!ball.has_by_force() || !ball.by_force()) {
+        for (const auto& robotList : {m_data->robotsBlue, m_data->robotsYellow}) {
+            for (const auto& it : robotList) {
+                it.first->stopDribbling();
+            }
         }
     }
 
@@ -668,7 +688,7 @@ void Simulator::moveRobot(const sslsim::TeleportRobot &robot) {
         if (!isPresent) return;
     }
 
-    if (!list.contains(robot.id().id())) return; //Recheck the list in case the has_present paragraph did change it.
+    if (!list.contains(robot.id().id())) return; // Recheck the list in case the has_present paragraph did change it.
 
 
     sslsim::TeleportRobot r = robot;
@@ -681,7 +701,9 @@ void Simulator::moveRobot(const sslsim::TeleportRobot &robot) {
     }
 
     SimRobot* sim_robot = list[robot.id().id()].first;
-    sim_robot->stopDribbling();
+    if (!r.has_by_force() || !r.by_force()) {
+        sim_robot->stopDribbling();
+    }
     sim_robot->move(r);
 }
 
@@ -739,6 +761,10 @@ void Simulator::handleCommand(const Command &command)
 
             if (realism.has_camera_position_error()) {
                 m_data->cameraPositionError = realism.camera_position_error();
+            }
+
+            if (realism.has_object_position_offset()) {
+                m_data->objectPositionOffset = realism.object_position_offset();
             }
 
             if (realism.has_robot_command_loss()) {

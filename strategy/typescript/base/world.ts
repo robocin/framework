@@ -64,7 +64,7 @@ export let Robots: Robot[] = [];
 /** True if we are the blue team, otherwise we're yellow */
 export let TeamIsBlue: boolean = false;
 /** True if the world is simulated */
-export let IsSimulated: boolean = false;
+export let WorldStateSource: pb.world.WorldSource = pb.world.WorldSource.REAL_LIFE;
 /** True if playing on the large field */
 export let IsLargeField: boolean = false;
 /** True if the current strategy run is a replay run */
@@ -121,10 +121,14 @@ export let BallPlacementPos: Readonly<Position> | undefined;
 export let MaxAllowedFriendlyRobots: number = 11;
 /** number of allowed opponent robots on the field based on division and cards */
 export let MaxAllowedOpponentRobots: number = 11;
+/** The number of goals the friendly team scored */
+export let FriendlyScore: number = 0;
+/** The number of goals the opponent team scored */
+export let OpponentScore: number = 0;
 
 export let RULEVERSION: string = "";
 
-export let DIVISION: string = "";
+export let DIVISION: "A" | "B" | "" = "";
 
 /** Field geometry. Lengths in meter */
 export interface GeometryType {
@@ -311,15 +315,22 @@ export function _updateWorld(state: pb.world.State) {
 	if (Time <= 0) {
 		throw new Error("Invalid Time. Outdated ra version!");
 	}
-	if (IsSimulated !== state.is_simulated) {
-		IsSimulated = !!state.is_simulated;
-		Constants.switchSimulatorConstants(IsSimulated);
+	const prevWorldSource = WorldStateSource;
+	if (state.world_source != undefined) {
+		if (state.world_source !== WorldStateSource) {
+			WorldStateSource = state.world_source;
+		}
+	} else if (state.is_simulated != undefined) {
+		WorldStateSource = state.is_simulated ? pb.world.WorldSource.INTERNAL_SIMULATION : pb.world.WorldSource.REAL_LIFE;
+	}
+	if (WorldStateSource !== prevWorldSource) {
+		Constants.switchSimulatorConstants(WorldStateSource !== pb.world.WorldSource.REAL_LIFE);
 	}
 
 	let radioResponses: pb.robot.RadioResponse[] = state.radio_response || [];
 
 	// update ball if available
-	Ball._update(state.ball, Time, Geometry);
+	Ball._update(state.ball, Time, Geometry, Robots);
 
 	let dataFriendly = TeamIsBlue ? state.blue : state.yellow;
 	if (dataFriendly) {
@@ -506,7 +517,12 @@ function _updateGameState(state: pb.amun.GameState) {
 	FriendlyRedCards = friendlyTeamInfo.red_cards;
 	OpponentRedCards = opponentTeamInfo.red_cards;
 	TeamName = friendlyTeamInfo.name;
-	OpponentTeamName = opponentTeamInfo.name;
+	if (opponentTeamInfo.name !== OpponentTeamName) {
+		OpponentTeamName = opponentTeamInfo.name;
+		for (let r of OpponentRobots) {
+			r.updateSpecs(OpponentTeamName);
+		}
+	}
 
 	if (friendlyTeamInfo.max_allowed_bots != undefined) {
 		MaxAllowedFriendlyRobots = friendlyTeamInfo.max_allowed_bots;
@@ -518,6 +534,9 @@ function _updateGameState(state: pb.amun.GameState) {
 	} else {
 		MaxAllowedOpponentRobots = DIVISION === "A" ? 11 : 6;
 	}
+
+	FriendlyScore = friendlyTeamInfo.score;
+	OpponentScore = opponentTeamInfo.score;
 }
 
 /** update and handle user inputs set for own robots */

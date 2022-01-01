@@ -69,6 +69,7 @@ signals:
     void updateRefereePort(quint16 port);
     void gotRefereeHost(QString hostName);
     void useInternalGameController(bool useInternal);
+    void gotCommandForGC(const amun::CommandReferee &command);
 
 public:
     void start();
@@ -126,6 +127,7 @@ private:
     bool m_useInternalReferee;
     bool m_useAutoref;
     bool m_trackingReplay = false;
+    Status m_lastTrackingReplayGameState;
 
     QSet<amun::PauseSimulatorReason> m_activePauseReasons;
     float m_previousSpeed;

@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright 2020 Andreas Wendler                                        *
+ *   Copyright 2021 Michel Schmid
  *   Robotics Erlangen e.V.                                                *
  *   http://www.robotics-erlangen.de/                                      *
  *   info@robotics-erlangen.de                                             *
@@ -18,22 +18,25 @@
  *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
-#ifndef BALLDRIBBLEFILTER_H
-#define BALLDRIBBLEFILTER_H
+#ifndef ABOUTUS_H
+#define ABOUTUS_H
 
-#include "abstractballfilter.h"
+#include <QDialog>
 
-class DribbleFilter : public AbstractBallFilter
+namespace Ui {
+class AboutUs;
+}
+
+class AboutUs : public QDialog
 {
+    Q_OBJECT
+
 public:
-    explicit DribbleFilter(const VisionFrame &frame, CameraInfo* cameraInfo);
-    DribbleFilter(const DribbleFilter& dribbleFilter, qint32 primaryCamera);
+    explicit AboutUs(QWidget *parent = nullptr);
+    ~AboutUs();
 
-    void processVisionFrame(VisionFrame const& frame) override;
-    bool acceptDetection(const VisionFrame& frame) override;
-    void writeBallState(world::Ball *ball, qint64 predictionTime) override;
-
-    bool isActive() const { return false; }
+private:
+    Ui::AboutUs *ui;
 };
 
-#endif // BALLDRIBBLEFILTER_H
+#endif // ABOUTUS_H

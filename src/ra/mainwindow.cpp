@@ -82,6 +82,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     ui->actionInputDevices->setIcon(QIcon("icon:32/input-gaming.png"));
     ui->actionPlotter->setIcon(QIcon("icon:32/plotter.png"));
     ui->actionConfiguration->setIcon(QIcon("icon:32/preferences-system.png"));
+    ui->actionAboutUs->setIcon(QIcon("icon:question.svg"));
 
     ui->actionQuit->setShortcut(QKeySequence::Quit);
 
@@ -140,6 +141,8 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(m_configDialog, SIGNAL(useDarkModeColors(bool)), ui->replay, SIGNAL(setUseDarkColors(bool)));
     connect(m_configDialog, SIGNAL(useNumKeysForReferee(bool)), this, SLOT(udpateSpeedActionsEnabled()));
 
+    m_aboutUs = new AboutUs(this);
+
     connect(ui->options, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
 
     ui->blueDebugger->setStrategy(amun::DebugSource::StrategyBlue);
@@ -180,6 +183,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(ui->actionInputDevices, SIGNAL(toggled(bool)), m_inputManager, SLOT(setEnabled(bool)));
 
     connect(ui->actionConfiguration, SIGNAL(triggered()), SLOT(showConfigDialog()));
+    connect(ui->actionAboutUs, SIGNAL(triggered()), m_aboutUs, SLOT(exec()));
     connect(ui->actionPlotter, SIGNAL(triggered()), this, SLOT(showPlotter()));
     connect(ui->actionAutoPause, SIGNAL(toggled(bool)), ui->simulator, SLOT(setEnableAutoPause(bool)));
     connect(ui->actionUseLocation, SIGNAL(toggled(bool)), this, SLOT(useLogfileLocation(bool)));
@@ -395,7 +399,7 @@ void MainWindow::showPlotter()
     Command c(new amun::Command);
     c->mutable_record()->set_request_backlog(PRELOAD_PACKETS);
     c->mutable_record()->set_for_replay(m_currentWidgetConfiguration % 2 == 0); // horus mode
-    emit sendCommand(c);
+    sendCommand(c);
 }
 
 void MainWindow::togglePause()
@@ -740,6 +744,8 @@ void MainWindow::setInternalRefereeEnabled(bool enabled)
     // force auto reload of strategies if external referee is used
     ui->robots->forceAutoReload(!enabled);
     ui->referee->forceAutoReload(!enabled);
+
+    ui->field->internalRefereeEnabled(enabled);
 }
 
 void MainWindow::setTransceiver(bool enabled)
@@ -812,7 +818,7 @@ void MainWindow::raMode()
     ui->logManager->hide();
     ui->field->setHorusMode(false);
 
-    emit sendCommand(uiChangedCommand(true));
+    sendCommand(uiChangedCommand(true));
     ui->simulator->sendPauseSimulator(amun::Horus, false);
 }
 
@@ -830,7 +836,7 @@ void MainWindow::horusMode()
     ui->field->setHorusMode(true);
 
     ui->simulator->sendPauseSimulator(amun::Horus, true);
-    emit sendCommand(uiChangedCommand(false));
+    sendCommand(uiChangedCommand(false));
 }
 
 void MainWindow::toggleHorusModeWidgets(bool enable)

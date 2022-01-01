@@ -46,14 +46,14 @@ struct ChipDetection {
 class FlyFilter : public AbstractBallFilter
 {
 public:
-    explicit FlyFilter(const VisionFrame& frame, CameraInfo* cameraInfo);
+    explicit FlyFilter(const VisionFrame& frame, CameraInfo* cameraInfo, const FieldTransform &transform);
     FlyFilter(const FlyFilter &filter) = default;
 
     void moveToCamera(qint32 primaryCamera);
 
     void processVisionFrame(const VisionFrame& frame) override;
     bool acceptDetection(const VisionFrame& frame) override;
-    void writeBallState(world::Ball *ball, qint64 predictionTime) override;
+    void writeBallState(world::Ball *ball, qint64 predictionTime, const QVector<RobotInfo> &robots) override;
     float distToStartPos() { return m_distToStartPos; }
 
     bool isActive();

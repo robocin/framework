@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright 2020 Andreas Wendler                                        *
+ *   Copyright 2021 Tobias Heineken                                        *
  *   Robotics Erlangen e.V.                                                *
  *   http://www.robotics-erlangen.de/                                      *
  *   info@robotics-erlangen.de                                             *
@@ -18,27 +18,11 @@
  *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
-#include "balldribblefilter.h"
-
-DribbleFilter::DribbleFilter(const VisionFrame& frame, CameraInfo* cameraInfo) :
-    AbstractBallFilter(frame, cameraInfo)
-{ }
-
-DribbleFilter::DribbleFilter(const DribbleFilter& dribbleFilter, qint32 primaryCamera) :
-    AbstractBallFilter(dribbleFilter, primaryCamera)
-{ }
-
-void DribbleFilter::processVisionFrame(VisionFrame const& frame)
-{
-
+#ifndef GITCONFIG_H
+#define GITCONFIG_H
+namespace gitconfig {
+    // These functions are used to avoid recompilation whenever the current hash and diff changes.
+    const char* const getErforceCommitDiff();
+    const char* const getErforceCommitHash();
 }
-
-bool DribbleFilter::acceptDetection(const VisionFrame& frame)
-{
-    return false;
-}
-
-void DribbleFilter::writeBallState(world::Ball *ball, qint64 predictionTime)
-{
-
-}
+#endif // GITCONFIG_H
