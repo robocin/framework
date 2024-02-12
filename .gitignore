@@ -12,3 +12,4 @@ error.html
 node_modules/
 /config/gamecontroller/data/
 /strategy/typescript/base/protobuf.ts
+.cache*

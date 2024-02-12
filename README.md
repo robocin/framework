@@ -64,6 +64,12 @@ The `simulator-cli` takes two command line arguments:
 Both of these argument take a `short_file_name`, i.e. just the filename without the path or the extension.
 For example, to start the binary with no realism and 2018 setup, call `simulator-cli -g 2018 --realism None`
 
+#### Choosing between Division A and B
+The simulator can be used for both divisions, but the only things that change between them are the geometry and the number of robots on the field.
+
+The default is the division B and it is possible to select this division just by starting the binary with the command `simulator-cli` or by selecting the geometry file for division B `simulator-cli -g 2020B`.
+To select the division A settings, call `simulator-cli -g 2020`.
+
 
 ### Other utilities
 This repo also contains various utilities:
