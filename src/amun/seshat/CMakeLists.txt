@@ -18,7 +18,7 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-add_library(seshat
+add_library(seshat STATIC
     include/seshat/seshat.h
     seshat.cpp
 
@@ -46,6 +46,8 @@ add_library(seshat
     visionconverter.cpp
     logfilefinder.cpp
     logfilefinder.h
+    longlivingstatuscache.cpp
+    longlivingstatuscache.h
 )
 
 target_link_libraries(seshat

@@ -24,23 +24,30 @@
 #include "core/vector.h"
 #include "speedprofile.h"
 #include <vector>
+#include <optional>
+
+enum class EndSpeed {
+    FAST,
+    EXACT,
+};
 
 
+// WARNING: generated trajectories may exceed the maximum velocity by a factor of up to sqrt(2) in rare cases
 class AlphaTimeTrajectory
 {
 public:
     // helper functions
-    static float minimumTime(Vector startSpeed, Vector endSpeed, float acc, bool fastEndSpeed);
-    static Vector minTimePos(Vector v0, Vector v1, float acc, float slowDownTime);
+    static float minimumTime(Vector startSpeed, Vector endSpeed, float acc, EndSpeed endSpeedType);
+    static Vector minTimePos(const RobotState &start, Vector v1, float acc, float slowDownTime);
 
     // search for position
-    static SpeedProfile findTrajectory(Vector v0, Vector v1, Vector position, float acc, float vMax, float slowDownTime, bool highPrecision, bool fastEndSpeed);
+    static std::optional<Trajectory> findTrajectory(const RobotState &start, const RobotState &target, float acc, float vMax, float slowDownTime, EndSpeed endSpeedType);
 
     // speed profile output
     // any input is valid as long as time is not negative
     // if minTime is given, it must be the value of minTimeFastEndSped(v0, v1, acc)
-    static SpeedProfile calculateTrajectory(Vector v0, Vector v1, float time, float angle, float acc, float vMax,
-                                            float slowDownTime, bool fastEndSpeed, float minTime = -1);
+    static Trajectory calculateTrajectory(const RobotState &start, Vector v1, float time, float angle, float acc, float vMax,
+                                            float slowDownTime, EndSpeed endSpeedType, float minTime = -1);
 
 private:
     struct TrajectoryPosInfo2D {
@@ -50,7 +57,9 @@ private:
 
     // pos only
     // WARNING: assumes that the input is valid and solvable (minimumTime must be included)
-    static TrajectoryPosInfo2D calculatePosition(Vector v0, Vector v1, float time, float angle, float acc, float vMax, bool fastEndSpeed);
+    static TrajectoryPosInfo2D calculatePosition(const RobotState &start, Vector v1, float time, float angle, float acc, float vMax, EndSpeed endSpeedType);
+    static std::optional<Trajectory> tryDirectBrake(const RobotState &start, const RobotState &target, float acc, float slowDownTime);
+    static Trajectory minTimeTrajectory(const RobotState &start, Vector v1, float slowDownTime, float minTime);
 
     static constexpr float REGULAR_TARGET_PRECISION = 0.01f;
     static constexpr float HIGH_QUALITY_TARGET_PRECISION = 0.0002f;

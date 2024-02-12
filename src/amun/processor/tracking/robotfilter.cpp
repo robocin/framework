@@ -30,7 +30,19 @@ RobotFilter::RobotFilter(const SSL_DetectionRobot &robot, qint64 lastTime, bool 
     Filter(lastTime),
     m_id(robot.robot_id()),
     m_teamIsYellow(teamIsYellow),
+    m_kalman(observationFromDetection(robot)),
+    m_futureKalman(observationFromDetection(robot)),
     m_futureTime(0)
+{
+    // we can only observe the position
+    m_kalman->H(0, 0) = 1.0;
+    m_kalman->H(1, 1) = 1.0;
+    m_kalman->H(2, 2) = 1.0;
+
+    resetFutureKalman();
+}
+
+RobotFilter::Kalman::Vector RobotFilter::observationFromDetection(const SSL_DetectionRobot &robot)
 {
     // translate from sslvision coordinate system
     Kalman::Vector x;
@@ -40,26 +52,12 @@ RobotFilter::RobotFilter(const SSL_DetectionRobot &robot, qint64 lastTime, bool 
     x(3) = 0.0;
     x(4) = 0.0;
     x(5) = 0.0;
-    m_kalman = new Kalman(x);
-
-    // we can only observe the position
-    m_kalman->H(0, 0) = 1.0;
-    m_kalman->H(1, 1) = 1.0;
-    m_kalman->H(2, 2) = 1.0;
-
-    m_futureKalman = new Kalman(x);
-    resetFutureKalman();
-}
-
-RobotFilter::~RobotFilter()
-{
-    delete m_kalman;
-    delete m_futureKalman;
+    return x;
 }
 
 void RobotFilter::resetFutureKalman()
 {
-    *m_futureKalman = *m_kalman;
+    m_futureKalman = m_kalman;
     m_futureTime = m_lastTime;
 
     m_futureKalman->H = Kalman::MatrixM::Zero();
@@ -94,9 +92,7 @@ void RobotFilter::update(qint64 time)
         }
         invalidateRobotCommand(frame.time);
 
-        // switch to the new camera if the primary camera data is too old
-        bool cameraSwitched = checkCamera(frame.cameraId, frame.time);
-        predict(frame.time, false, true, cameraSwitched, m_lastRadioCommand);
+        predict(frame.time, false, true, frame.switchCamera, m_lastRadioCommand);
         applyVisionFrame(frame);
 
         isVisionUpdated = true;
@@ -141,7 +137,7 @@ void RobotFilter::invalidateRobotCommand(qint64 time)
 void RobotFilter::predict(qint64 time, bool updateFuture, bool permanentUpdate, bool cameraSwitched, const RadioCommand &cmd)
 {
     // just assume that the prediction step is the same for now and the future
-    Kalman* kalman = (updateFuture) ? m_futureKalman : m_kalman;
+    KalmanHolder& kalman = (updateFuture) ? m_futureKalman : m_kalman;
     const qint64 lastTime = (updateFuture) ? m_futureTime : m_lastTime;
     const double timeDiff = (time - lastTime) * 1E-9;
     Q_ASSERT(timeDiff >= 0);
@@ -267,6 +263,13 @@ double RobotFilter::limitAngle(double angle) const
 
 void RobotFilter::applyVisionFrame(const VisionFrame &frame)
 {
+    if (frame.switchCamera || m_primaryCamera == -1) {
+        m_primaryCamera = frame.cameraId;
+    }
+    if (frame.cameraId == m_primaryCamera) {
+        m_lastPrimaryTime = frame.time;
+    }
+
     const float pRot = m_kalman->state()(2);
     const float pRotLimited = limitAngle(pRot);
     if (pRot != pRotLimited) {
@@ -384,9 +387,9 @@ float RobotFilter::distanceTo(const SSL_DetectionRobot &robot) const
     return (b - p).norm();
 }
 
-void RobotFilter::addVisionFrame(qint32 cameraId, const SSL_DetectionRobot &robot, qint64 time, qint64 visionProcessingTime)
+void RobotFilter::addVisionFrame(qint32 cameraId, const SSL_DetectionRobot &robot, qint64 time, qint64 visionProcessingTime, bool switchCamera)
 {
-    m_visionFrames.append(VisionFrame(cameraId, robot, time, visionProcessingTime));
+    m_visionFrames.append(VisionFrame(cameraId, robot, time, visionProcessingTime, switchCamera));
     // only count frames for the primary camera
     if (m_primaryCamera == -1 || m_primaryCamera == cameraId) {
         m_frameCounter++;
@@ -407,6 +410,7 @@ RobotInfo RobotFilter::getRobotInfo() const
     float phi = limitAngle(m_futureKalman->state()(2));
     result.dribblerPos = result.robotPos + DRIBBLER_DIST * Eigen::Vector2f(cos(phi), sin(phi));
     result.speed = Eigen::Vector2f(m_futureKalman->state()[3], m_futureKalman->state()[4]);
+    result.angularVelocity = m_futureKalman->state()(5);
 
     result.pastRobotPos = Eigen::Vector2f(m_kalman->state()(0), m_kalman->state()(1));
     phi = limitAngle(m_kalman->state()(2));
@@ -415,6 +419,8 @@ RobotInfo RobotFilter::getRobotInfo() const
     const auto& cmd = m_lastRadioCommand.first;
     result.chipCommand = cmd.has_kick_style() && cmd.kick_style() == robot::Command::Chip;;
     result.linearCommand = cmd.has_kick_style() && cmd.kick_style() == robot::Command::Linear;
+    result.dribblerActive = cmd.has_dribbler() && cmd.dribbler() > 0;
+    result.kickPower = cmd.has_kick_power() ? cmd.kick_power() : 0;
 
     result.identifier = m_id + (m_teamIsYellow ? 0 : 100);
 

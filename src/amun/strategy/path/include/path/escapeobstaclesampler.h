@@ -28,8 +28,8 @@ class EscapeObstacleSampler : public TrajectorySampler
 {
 public:
     EscapeObstacleSampler(RNG *rng, const WorldInformation &world, PathDebug &debug) : TrajectorySampler(rng, world, debug) {}
-    bool compute(const TrajectoryInput &input) override;
-    const std::vector<TrajectoryGenerationInfo> &getResult() const override { return m_generationInfo; }
+    bool compute(const TrajectoryInput &input) final override;
+    const std::vector<Trajectory> &getResult() const final override { return m_result; }
     int getMaxIntersectingObstaclePrio() const { return m_maxIntersectingObstaclePrio; }
     void resetMaxIntersectingObstaclePrio() { m_maxIntersectingObstaclePrio = -1; }
     void updateFrom(const EscapeObstacleSampler &other);
@@ -37,13 +37,14 @@ public:
 private:
     struct TrajectoryRating {
         int maxPrio = -1;
-        float maxPrioTime = 100000;
+        float maxPrioTime = std::numeric_limits<float>::infinity();
         bool endsSafely = false; // if the trajectory ends in a safe point
         float escapeTime = 0; // the point in time where the trajectory is safe to leave
+        float minObstacleDistance = std::numeric_limits<float>::infinity();
 
-        bool isBetterThan(const TrajectoryRating &other);
+        bool isBetterThan(const TrajectoryRating &other) const;
     };
-    TrajectoryRating rateEscapingTrajectory(const TrajectoryInput &input, const SpeedProfile &speedProfile) const;
+    TrajectoryRating rateEscapingTrajectory(const TrajectoryInput &input, const Trajectory &speedProfile) const;
 
 private:
     float m_bestEscapingTime = 2;
@@ -51,7 +52,7 @@ private:
 
     int m_maxIntersectingObstaclePrio = -1;
 
-    std::vector<TrajectoryGenerationInfo> m_generationInfo;
+    std::vector<Trajectory> m_result;
 };
 
 #endif // ESCAPEOBSTACLESAMPLER_H

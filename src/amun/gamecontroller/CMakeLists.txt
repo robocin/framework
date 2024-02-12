@@ -18,16 +18,16 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-add_library(gamecontroller
-    include/gamecontroller/externalgamecontroller.h
-    include/gamecontroller/gamecontrollerconnection.h
-    include/gamecontroller/sslgamecontroller.h
+add_library(gamecontroller STATIC
+    include/gamecontroller/gamecontrollersocket.h
+    include/gamecontroller/internalgamecontroller.h
+    include/gamecontroller/strategygamecontrollermediator.h
 
-    externalgamecontroller.cpp
-    gamecontrollerconnection.cpp
-    sslgamecontroller.cpp
+    gamecontrollersocket.cpp
+    internalgamecontroller.cpp
     sslvisiontracked.cpp
     sslvisiontracked.h
+    strategygamecontrollermediator.cpp
 )
 target_link_libraries(gamecontroller
     PUBLIC shared::core
@@ -42,7 +42,5 @@ target_include_directories(gamecontroller
 add_dependencies(gamecontroller
     gamecontroller_download
 )
-target_compile_definitions(gamecontroller PRIVATE GAMECONTROLLER_EXECUTABLE_LOCATION="${GAMECONTROLLER_EXECUTABLE_LOCATION}")
-
 
 add_library(amun::gamecontroller ALIAS gamecontroller)

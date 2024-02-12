@@ -27,6 +27,7 @@ import { accelerationsByTeam, RobotSpecs } from "base/accelerations";
 import { throwInDebug } from "base/amun";
 import * as Constants from "base/constants";
 import { Coordinates } from "base/coordinates";
+import * as geom from "base/geom";
 import * as MathUtil from "base/mathutil";
 import { Path } from "base/path";
 import * as pb from "base/protobuf";
@@ -52,18 +53,33 @@ interface BallLike {
 	posZ: number;
 }
 
-interface ControllerInput {
-	v_f?: number;
-	v_s?: number;
-	omega?: number;
-	spline?: any;
-}
+export const REUSE_LAST_TRAJECTORY = Symbol("REUSE_LAST_TRAJECTORY");
+export const HALT = Symbol("HALT");
 
+export type ControllerInput =
+	typeof REUSE_LAST_TRAJECTORY
+	| typeof HALT
+	| TrajectoryCommand;
+
+export type TrajectoryCommand = {
+	spline: pb.robot.Spline[];
+	v_f?: undefined;
+	v_s?: undefined;
+	omega?: undefined;
+} | {
+	spline?: undefined;
+	v_f: number;
+	v_s: number;
+	omega: number;
+};
+
+/* eslint-disable @typescript-eslint/naming-convention */
 interface GeomType {
 	FieldWidthHalf: number;
 	FieldHeightHalf: number;
 	BoundaryWidth: number;
 }
+/* eslint-enable @typescript-eslint/naming-convention */
 
 export interface UserControl {
 	speed: Speed;
@@ -99,7 +115,7 @@ export class Robot implements RobotState {
 		hasBallDistance: 0.04, // 4 cm, robots where the balls distance to the dribbler is less than 2cm are considered to have the ball [m]
 		passSpeed: 3, // speed with which the ball should arrive at the pass target  [m/s]
 		shootDriveSpeed: 0.2, // how fast the shoot task drives at the ball [m/s]
-		minAngleError: 4 / 180 * Math.PI // minimal angular precision that the shoot task guarantees [in radians]
+		minAngleError: geom.degreeToRadian(4) // minimal angular precision that the shoot task guarantees [in radians]
 	};
 
 	// See RobotState
@@ -133,7 +149,7 @@ export class Robot implements RobotState {
 	// private attributes
 	private _toStringCache: string = "";
 	protected _currentTime: number = 0;
-	protected _hasBall: {[offset: number]: boolean} = {};
+	protected _hasBall: { [offset: number]: boolean } = {};
 
 	/**
 	 * Creates a new robot object.
@@ -233,8 +249,8 @@ export class Robot implements RobotState {
 		}
 
 		// interpolate vector used for correction to circumvent noise
-		let MIN_COMPENSATION = 0.005;
-		let BOUND_COMPENSATION_ANGLE = 70 / 180 * Math.PI;
+		const MIN_COMPENSATION = 0.005;
+		const BOUND_COMPENSATION_ANGLE = geom.degreeToRadian(70);
 		if (lclen < MIN_COMPENSATION) {
 			latencyCompensation = new Vector(0, 0);
 		} else if (lclen < 2 * MIN_COMPENSATION) {
@@ -277,14 +293,14 @@ export class Robot implements RobotState {
 			return false;
 		// in hysteresis area without having had the ball
 		} else if (offset >= this.dribblerWidth / 2 - 2 * Constants.positionError + sideOffset
-					&&  !this._hasBall[sideOffset]) {
+					&& !this._hasBall[sideOffset]) {
 			return false;
 		}
 
 		const latencyXHysteresis = this._hasBall[sideOffset] ? latencyCompensation.x / 2 : 0;
 
 		this._hasBall[sideOffset] = relpos.x > this.shootRadius * (-1.5)
-					&&  relpos.x < latencyCompensation.x + latencyXHysteresis &&  ball.posZ < Constants.maxRobotHeight * 1.2; // *1.2 to compensate for vision error
+					&& relpos.x < latencyCompensation.x + latencyXHysteresis && ball.posZ < Constants.maxRobotHeight * 1.2; // *1.2 to compensate for vision error
 		return this._hasBall[sideOffset];
 	}
 
@@ -294,7 +310,7 @@ export class Robot implements RobotState {
 			this.maxSpeed = accel.vmax;
 			this.maxAngularSpeed = accel.vangular;
 			this.acceleration = accel.profile;
-			amun.log("updated specs with team " + teamname);
+			amun.log(`updated specs with team ${teamname}`);
 		}
 	}
 }
@@ -313,11 +329,14 @@ export class FriendlyRobot extends Robot {
 	path: Path;
 	trajectory: Trajectory;
 	/** response from the robot, only set if there is a current response */
-	radioResponse: pb.robot.RadioResponse  | undefined;
+	radioResponse: pb.robot.RadioResponse | undefined;
 	/** command from input devices (fields: speed, omega, kickStyle, kickPower, dribblerSpeed) */
 	userControl: UserControl | undefined;
 	/** command used when robots are dragged with the mouse (fields: time, pos (global)) (optional) */
-	moveCommand: {time: number, pos: Position} | undefined;
+	moveCommand: { time: number; pos: Position } | undefined;
+
+	centerToDribbler: number | undefined;
+
 
 	// private attributes
 	private _kickStyle?: pb.robot.Command.KickStyle;
@@ -326,7 +345,7 @@ export class FriendlyRobot extends Robot {
 	private _dribblerSpeed: number = 0;
 	private _standbyTimer: number = -1;
 	private _standbyTick: boolean = false;
-	private _controllerInput: ControllerInput | {} = {};
+	private _controllerInput: ControllerInput = REUSE_LAST_TRAJECTORY;
 
 	private _dribblerSpeedVisualized = false;
 
@@ -348,7 +367,7 @@ export class FriendlyRobot extends Robot {
 		}
 		if (specs.dribbler_width != undefined) {
 			this.dribblerWidth = specs.dribbler_width;
-		} else {// estimate dribbler width
+		} else { // estimate dribbler width
 			this.dribblerWidth = 2 * Math.sqrt(this.radius * this.radius - this.shootRadius * this.shootRadius);
 		}
 		this.maxSpeed = specs.v_max != undefined ? specs.v_max : 2;
@@ -373,6 +392,10 @@ export class FriendlyRobot extends Robot {
 		this.isFriendly = true;
 		this.trajectory = new Trajectory(this);
 		this.path = new Path(this.id);
+
+		if (specs.angle != undefined) {
+			this.centerToDribbler = this.radius * Math.sin((Math.PI - specs.angle) * 0.5);
+		}
 	}
 
 	_updatePathBoundaries(geometry: GeomType, aoi: pb.world.TrackingAOI | undefined) {
@@ -380,9 +403,9 @@ export class FriendlyRobot extends Robot {
 			this.path.setBoundary(aoi.x1, aoi.y1, aoi.x2, aoi.y2);
 		} else {
 			this.path.setBoundary(
-				-geometry.FieldWidthHalf  - geometry.BoundaryWidth - 0.02,
+				-geometry.FieldWidthHalf - geometry.BoundaryWidth - 0.02,
 				-geometry.FieldHeightHalf - geometry.BoundaryWidth - 0.02,
-				geometry.FieldWidthHalf  + geometry.BoundaryWidth + 0.02,
+				geometry.FieldWidthHalf + geometry.BoundaryWidth + 0.02,
 				geometry.FieldHeightHalf + geometry.BoundaryWidth + 0.02);
 		}
 	}
@@ -410,7 +433,7 @@ export class FriendlyRobot extends Robot {
 	}
 
 	_command() {
-		let STANDBY_DELAY = 30;
+		const STANDBY_DELAY = 30;
 		let standby = this._standbyTimer >= 0 && (this._currentTime - this._standbyTimer > STANDBY_DELAY);
 
 		let result: pb.robot.Command = {
@@ -420,21 +443,26 @@ export class FriendlyRobot extends Robot {
 			dribbler: this._dribblerSpeed,
 			standby: standby
 		};
-		if (this._controllerInput !== {}) {
-			let input: ControllerInput = <ControllerInput> this._controllerInput;
-			result.controller = input;
-			result.v_f = input.v_f;
-			result.v_s = input.v_s;
-			result.omega = input.omega;
+
+		if (this._controllerInput === HALT) {
+			result.controller = {};
+		} else if (this._controllerInput !== REUSE_LAST_TRAJECTORY) {
+			result.controller = {
+				spline: this._controllerInput.spline,
+			};
+			result.v_f = this._controllerInput.v_f;
+			result.v_s = this._controllerInput.v_s;
+			result.omega = this._controllerInput.omega;
 		}
+
 		return result;
 	}
 
 	_update(state: pb.world.Robot, time: number, radioResponses?: pb.robot.RadioResponse[]) {
 		// keep current time for use by setStandby
 		this._currentTime = time;
-		// bypass override check in setControllerInput
-		this._controllerInput = {}; // halt robot by default
+		// Halt robot by default
+		this._controllerInput = HALT;
 		this.shootDisable(); // disable shoot
 		this._dribblerSpeedVisualized = false;
 		this.setDribblerSpeed(0); // stop dribbler
@@ -453,13 +481,15 @@ export class FriendlyRobot extends Robot {
 	}
 
 	/**
-	 * Set output from trajectory planing on robot
-	 * The robot is halted by default if no command is set for it. To tell a robot to follow its old trajectory call setControllerInput(undefined)
+	 * Set output from trajectory planing on robot. The robot is halted by
+	 * default if no command is set for it. To tell a robot to follow its old
+	 * trajectory, call
+	 *   setControllerInput(REUSE_LAST_TRAJECTORY)
 	 * @param input - Target points for the controller, in global coordinates!
 	 */
 	setControllerInput(input: ControllerInput) {
 		// Forbid overriding controller input except with halt
-		if (input && input.spline && (this._controllerInput === {} || (<ControllerInput> this._controllerInput).spline)) {
+		if (input !== HALT && this._controllerInput !== HALT) {
 			throw new Error("Setting controller input twice");
 		}
 		this._controllerInput = input;
@@ -529,7 +559,8 @@ export class FriendlyRobot extends Robot {
 
 	/** Halts robot */
 	halt() {
-		this.setControllerInput({});
+		this.path.setHalted();
+		this.setControllerInput(HALT);
 	}
 
 	/**
@@ -549,49 +580,6 @@ export class FriendlyRobot extends Robot {
 				this._standbyTimer = -1;
 			}
 			this._standbyTick = false;
-		}
-	}
-
-	/**
-	 * Calculate shoot speed neccessary for linear shoot to reach the target with a certain speed.
-	 * This is limited to maxShootLinear and maxBallSpeed.
-	 * @param destSpeed - Ball speed at destination [m/s]
-	 * @param distance - Distance to chip [m]
-	 * @param ignoreLimit - Don't enforce rule given shoot speed limit, if true
-	 * @returns Speed to shoot with [m/s]
-	 */
-	calculateShootSpeed(destSpeed: number, distance: number, ignoreLimit: boolean = false): number {
-		let maxShot = ignoreLimit ? this.maxShotLinear : Math.min(this.maxShotLinear, Constants.maxBallSpeed);
-		if (destSpeed >= maxShot) {
-			return maxShot;
-		}
-
-		let fastBallBrake = Constants.fastBallDeceleration;
-		let slowBallBrake = Constants.ballDeceleration;
-		let ballSwitchRatio = Constants.ballSwitchRatio;
-
-		// solve(v_0+a_f*t_end=v_d, t_end);
-		// solve(integrate(v_0+t*a_f,t, 0, t_end)=d,v_0);
-		let v_fast = Math.sqrt(destSpeed * destSpeed - 2 * fastBallBrake * distance);
-
-		if (v_fast < maxShot && v_fast * ballSwitchRatio < destSpeed) {
-			return v_fast;
-		}
-
-		// solve(v_0*switch=v_0+a_f*t_mid, t_mid);
-		// solve(v_0+a_f*t_mid+a_s*(t_end-t_mid)=v_d, t_end);
-		// solve(integrate(v_0+a_f*t,t,0,t_mid)+integrate(v_0+a_f*t_mid+a_s*(t-t_mid),t,t_mid,t_end)=d, v_0);
-		let a_s = slowBallBrake;
-		let a_f = fastBallBrake;
-		let sw = ballSwitchRatio;
-		let d = distance;
-		let v_d = destSpeed;
-		let v_0 = Math.sqrt(a_f * (2 * a_s * d - v_d * v_d) / ((a_s - a_f) * sw * sw - a_s));
-
-		if (v_0 > maxShot) {
-			return maxShot;
-		} else {
-			return v_0;
 		}
 	}
 }

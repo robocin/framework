@@ -61,6 +61,8 @@ public:
     void setBacklogDirectory(const QString &directoryName);
     void setMaxBacklog(size_t newMax);
     void setRealismConfig(const QString &shortFile);
+    void setSilent(bool silent) { m_isSilent = silent; }
+    void setForceStartGame(bool forceStart) { m_forceStart = forceStart; }
 
     void start();
 
@@ -72,16 +74,17 @@ public slots:
 
 signals:
     void sendCommand(const Command &command);
-    void saveBacklogFile(QString filename, Status teamStatus, bool processEvents);
+    void saveBacklogFile(QString filename/*, Status teamStatus*/, bool processEvents);
     void backlogStatus(Status);
 
 private:
     void addStrategyLoad(amun::CommandStrategy *strategy, const QString &initScript, const QString &entryPoint);
-    void handleStrategyStatus(const amun::StatusStrategy &strategy);
+    void handleStrategyStatus(const amun::StatusStrategy &strategy, qint64 time);
     void sendFlipOption(const std::string &name);
     void delayedExit(int exitCode);
     void performExit(int exit);
     void stopAmunAndSaveBacklog(QString directory);
+    void reportEvents();
 
     struct OptionInfo {
         bool value;
@@ -99,6 +102,8 @@ private:
     bool m_reportEvents = false;
     int m_simulationSpeed = 100;
     bool m_isInCompileMode = false;
+    bool m_isSilent = false;
+    bool m_forceStart = false;
 
     QString m_simulatorConfigurationFile;
     qint64 m_simulationRunningTime = std::numeric_limits<qint64>::max();

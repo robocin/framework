@@ -65,6 +65,7 @@ void throwError(Isolate* isolate, StringType text)
 template<typename Target>
 Local<Target> installCallbacks(Isolate* isolate, Local<Target> target, const QList<CallbackInfo>& callbacks, const CallbackDataMapper& dataMapper)
 {
+    Local<Context> context = isolate->GetCurrentContext();
     for (const auto& callback : callbacks) {
         auto functionTemplate = FunctionTemplate::New(isolate, callback.function, dataMapper(callback),
                 Local<Signature>(), 0, ConstructorBehavior::kThrow, SideEffectType::kHasSideEffect);
@@ -72,7 +73,8 @@ Local<Target> installCallbacks(Isolate* isolate, Local<Target> target, const QLi
 
         auto name = v8string(isolate, callback.name);
         function->SetName(name);
-        target->Set(name, function);
+        target->Set(context, name, function).Check();
+
     }
     return target;
 }
@@ -83,13 +85,6 @@ Local<Target> installCallbacks(Isolate* isolate, Local<Target> target, const QLi
     return installCallbacks(isolate, target, callbacks, [data](auto _) { return data; });
 }
 
-template<typename TargetType>
-Local<TargetType> createWithCallbacks(Isolate* isolate, const QList<CallbackInfo>& callbacks, Local<Value> data)
-{
-    Local<TargetType> target = TargetType::New(isolate);
-    return installCallbacks(isolate, target, callbacks, data);
-}
-
 template void throwError(Isolate*, QByteArray);
 template void throwError(Isolate*, QString);
 template void throwError(Isolate*, const char*);
@@ -97,7 +92,4 @@ template void throwError(Isolate*, std::string);
 
 template Local<Object> installCallbacks(Isolate*, Local<Object>, const QList<CallbackInfo>&, const CallbackDataMapper&);
 template Local<Object> installCallbacks(Isolate*, Local<Object>, const QList<CallbackInfo>&, Local<Value>);
-
-template Local<ObjectTemplate> createWithCallbacks(Isolate*, const QList<CallbackInfo>&, Local<Value>);
-
 }

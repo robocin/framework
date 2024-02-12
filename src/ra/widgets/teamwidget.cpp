@@ -169,7 +169,20 @@ void TeamWidget::load()
 {
     QSettings s;
     s.beginGroup(teamTypeName());
-    m_filename = s.value("Script").toString();
+
+    const auto previousFilename = s.value("Script").toString();
+    if (previousFilename != "") {
+        m_filename = previousFilename;
+    } else if (m_recentScripts != nullptr) {
+#ifdef EASY_MODE
+        const auto tsInitRegex = QRegularExpression(".*.ts");
+        const QStringList typescriptStrategies = m_recentScripts->filter(tsInitRegex);
+        if (typescriptStrategies.length() > 0) {
+            m_filename = typescriptStrategies.first();
+        }
+#endif
+    }
+
     m_entryPoint = s.value("EntryPoint").toString();
     m_reloadAction->setChecked(s.value("AutoReload").toBool());
     m_performanceAction->setChecked(s.value("PerformanceMode", true).toBool());
@@ -286,8 +299,9 @@ void TeamWidget::addEntryPoint(QMenu *menu, const QString &name, const QString &
         const QString nameLeft = name.left(idx);
         const QString nameRight = name.right(name.length() - idx - 1);
         QAction *action = NULL;
-        if (!menu->actions().isEmpty()) {
-            action = menu->actions().last();
+        const QList<QAction*> actions = menu->actions();
+        if (!actions.isEmpty()) {
+            action = actions.last();
         }
 
         QMenu *subMenu;
@@ -441,23 +455,6 @@ void TeamWidget::selectEntryPoint(const QString &entry_point)
 void TeamWidget::selectEntryPoint(QAction* action)
 {
     selectEntryPoint(action->data().toString());
-}
-
-void TeamWidget::resendAll(bool send)
-{
-    if (send && !m_filename.isEmpty() && !m_entryPoint.isEmpty()) {
-        Command command(new amun::Command);
-        amun::CommandStrategy *strategy = commandStrategyFromType(command);
-        amun::CommandStrategyLoad *strategyLoad = strategy->mutable_load();
-
-        strategyLoad->set_filename(m_filename.toStdString());
-        strategyLoad->set_entry_point(m_entryPoint.toStdString());
-        strategy->set_auto_reload(m_reloadAction->isChecked());
-        strategy->set_enable_debug(m_debugAction->isChecked());
-        strategy->set_performance_mode(m_performanceAction->isChecked());
-
-        emit sendCommand(command);
-    }
 }
 
 void TeamWidget::sendReload()

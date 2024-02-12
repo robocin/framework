@@ -195,7 +195,7 @@ void LogProcessor::run()
     // cleanup
     qDeleteAll(logreaders);
 
-    emit finished();
+    emit finishedProcessing();
 }
 
 // skip uninteresting states
@@ -350,6 +350,10 @@ qint64 LogProcessor::filterLog(SeqLogFileReader &reader, Exchanger *writer, Exch
             continue;
         }
         removeDebugOutput(status);
+
+        if (m_options & CutGit) {
+            status->clear_git_info();
+        }
 
         insertHashInfo(status, loguid, currentFrame - 1);
 

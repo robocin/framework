@@ -22,12 +22,13 @@
 #define STRATEGY_H
 
 
-#include "gamecontroller/gamecontrollerconnection.h"
+#include "gamecontroller/strategygamecontrollermediator.h"
 #include "protobuf/command.h"
 #include "protobuf/robotcommand.h"
 #include "protobuf/status.h"
 #include "strategy/script/scriptstate.h"
 #include "strategy/script/strategytype.h"
+#include <QDir>
 #include <QString>
 #include <QStringList>
 #include <memory>
@@ -52,7 +53,7 @@ class Strategy : public QObject
 
 public:
     Strategy(const Timer *timer, StrategyType type, DebugHelper *helper, CompilerRegistry* registry,
-             std::shared_ptr<GameControllerConnection> &gameControllerConnection, bool internalAutoref = false,
+             std::shared_ptr<StrategyGameControllerMediator> &gameControllerConnection, bool internalAutoref = false,
              bool isLogplayer = false, ProtobufFileSaver *pathInputSaver = nullptr);
     ~Strategy() override;
     Strategy(const Strategy&) = delete;
@@ -69,6 +70,7 @@ signals:
     void sendStrategyCommands(bool blue, const QList<RobotCommandInfo> &commands, qint64 time);
     void sendHalt(bool blue);
     void startReadingStatus();
+	void recordGitDiff(QString dir, bool changed, int type);
 
 public slots:
     void handleStatus(const Status &status);
@@ -81,6 +83,7 @@ private slots:
     void reload();
     void sendCommand(const Command &command);
     void loadStateChanged(amun::StatusStrategy::STATE state);
+    void requestGitRecording(const QString& dir, bool changed);
 
 private:
     static void initV8();
@@ -123,7 +126,10 @@ private:
 
     CompilerRegistry* m_compilerRegistry;
 
-    std::shared_ptr<GameControllerConnection> m_gameControllerConnection;
+    std::shared_ptr<StrategyGameControllerMediator> m_gameControllerConnection;
+
+	// TODO does this need a default value?
+	amun::StatusStrategy::STATE m_currentState;
 
 #ifdef V8_FOUND
     static std::unique_ptr<v8::Platform> static_platform;

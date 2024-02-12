@@ -36,7 +36,7 @@ class SpeedTracker;
 class Timer;
 class Tracker;
 class QTimer;
-class SSLGameController;
+class InternalGameController;
 
 class Processor : public QObject
 {
@@ -50,7 +50,7 @@ public:
     Processor(const Processor&) = delete;
     Processor& operator=(const Processor&) = delete;
     bool getIsFlipped() const { return m_lastFlipped; }
-    SSLGameController *getInternalGameController() const { return m_gameController; }
+    InternalGameController *getInternalGameController() const { return m_gameController; }
     void resetTracking();
 
 signals:
@@ -58,10 +58,11 @@ signals:
     void sendStrategyStatus(const Status &status);
     void sendRadioCommands(const QList<robot::RadioCommand> &commands, qint64 processingStart);
     void setFlipped(bool flipped);
+    void refereeHostChanged(QString host);
 
 public slots:
     void setScaling(double scaling);
-    void handleRefereePacket(const QByteArray &data, qint64 time);
+    void handleRefereePacket(const QByteArray &data, qint64 time, QString sender);
     void handleVisionPacket(const QByteArray &data, qint64 time, QString sender);
     void handleSimulatorExtraVision(const QByteArray &data);
     void handleMixedTeamInfo(const QByteArray &data, qint64 time);
@@ -92,8 +93,9 @@ private:
     const world::Robot *getWorldRobot(const RobotList &robots, uint id);
     void injectExtraData(Status &status);
     void injectUserControl(Status &status, bool isBlue);
-    Status assembleStatus(Tracker &tracker, qint64 time, bool resetRaw);
+    Status assembleStatus(qint64 time, bool resetRaw);
     world::WorldSource currentWorldSource() const;
+    static QString ballModelConfigFile(bool isSimulator);
 
     void sendTeams();
 
@@ -102,7 +104,6 @@ private:
     Referee *m_referee;
     Referee *m_refereeInternal;
     std::unique_ptr<Tracker> m_tracker;
-    std::unique_ptr<Tracker> m_strategyTracker;
     std::unique_ptr<Tracker> m_speedTracker;
     std::unique_ptr<Tracker> m_simpleTracker;
     QList<robot::RadioResponse> m_responses;
@@ -114,7 +115,7 @@ private:
     bool m_internalSimulatorEnabled = false;
     bool m_externalSimulatorEnabled = false;
     bool m_lastFlipped;
-    SSLGameController *m_gameController;
+    InternalGameController *m_gameController;
     QThread *m_gameControllerThread;
 
     Team m_blueTeam;
@@ -123,6 +124,9 @@ private:
     bool m_transceiverEnabled;
 
     world::DivisionDimensions m_divisionDimensions;
+    world::BallModel m_ballModel;
+    bool m_ballModelUpdated = false;
+    const bool m_saveBallModel;
 };
 
 #endif // PROCESSOR_H

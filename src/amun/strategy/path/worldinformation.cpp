@@ -21,6 +21,7 @@
 #include "worldinformation.h"
 
 #include <QDebug>
+#include <algorithm>
 
 void WorldInformation::setRadius(float r)
 {
@@ -45,58 +46,53 @@ void WorldInformation::clearObstacles()
     m_movingCircles.clear();
     m_movingLines.clear();
     m_friendlyRobotObstacles.clear();
-}
-
-void WorldInformation::addToAllStaticObstacleRadius(float additionalRadius)
-{
-    for (StaticObstacles::Circle &c: m_circleObstacles) { c.radius += additionalRadius; }
-    for (StaticObstacles::Rect &r: m_rectObstacles) { r.radius += additionalRadius; }
-    for (StaticObstacles::Triangle &t: m_triangleObstacles) { t.radius += additionalRadius; }
-    for (StaticObstacles::Line &l: m_lineObstacles) { l.radius += additionalRadius; }
+    m_opponentRobotObstacles.clear();
 }
 
 void WorldInformation::addCircle(float x, float y, float radius, const char* name, int prio)
 {
-    m_circleObstacles.emplace_back(name, prio, radius, Vector(x, y));
+    m_circleObstacles.emplace_back(name, prio, radius + m_radius, Vector(x, y));
 }
 
 void WorldInformation::addLine(float x1, float y1, float x2, float y2, float width, const char* name, int prio)
 {
-    m_lineObstacles.emplace_back(name, prio, width, Vector(x1, y1), Vector(x2, y2));
+    m_lineObstacles.emplace_back(name, prio, width + m_radius, Vector(x1, y1), Vector(x2, y2));
 }
 
 void WorldInformation::addRect(float x1, float y1, float x2, float y2, const char* name, int prio, float radius)
 {
-    StaticObstacles::Rect r(name, prio, x1, y1, x2, y2, radius);
+    const Obstacles::Rect r(name, prio, x1, y1, x2, y2, radius + m_radius);
     m_rectObstacles.push_back(r);
 }
 
 void WorldInformation::addTriangle(float x1, float y1, float x2, float y2, float x3, float y3, float lineWidth, const char *name, int prio)
 {
-    m_triangleObstacles.emplace_back(name, prio, lineWidth, Vector(x1, y1), Vector(x2, y2), Vector(x3, y3));
+    m_triangleObstacles.emplace_back(name, prio, lineWidth + m_radius, Vector(x1, y1), Vector(x2, y2), Vector(x3, y3));
 }
 
-void WorldInformation::collectObstacles() const
+void WorldInformation::collectObstacles()
 {
+    m_staticObstacles.clear();
+    for (const Obstacles::Circle &c: m_circleObstacles) { m_staticObstacles.append(&c); }
+    for (const Obstacles::Rect &r: m_rectObstacles) { m_staticObstacles.append(&r); }
+    for (const Obstacles::Triangle &t: m_triangleObstacles) { m_staticObstacles.append(&t); }
+    for (const Obstacles::Line &l: m_lineObstacles) { m_staticObstacles.append(&l); }
+
     m_obstacles.clear();
-    for (const StaticObstacles::Circle &c: m_circleObstacles) { m_obstacles.append(&c); }
-    for (const StaticObstacles::Rect &r: m_rectObstacles) { m_obstacles.append(&r); }
-    for (const StaticObstacles::Triangle &t: m_triangleObstacles) { m_obstacles.append(&t); }
-    for (const StaticObstacles::Line &l: m_lineObstacles) { m_obstacles.append(&l); }
-}
+    for (auto &c: m_circleObstacles) { m_obstacles.push_back(&c); }
+    for (auto &r: m_rectObstacles) { m_obstacles.push_back(&r); }
+    for (auto &t: m_triangleObstacles) { m_obstacles.push_back(&t); }
+    for (auto &l: m_lineObstacles) { m_obstacles.push_back(&l); }
+    for (auto &o : m_movingCircles) { m_obstacles.push_back(&o); }
+    for (auto &o : m_movingLines) { m_obstacles.push_back(&o); }
+    for (auto &o : m_friendlyRobotObstacles) { m_obstacles.push_back(&o); }
+    for (auto &o : m_opponentRobotObstacles) { m_obstacles.push_back(&o); }
 
-void WorldInformation::collectMovingObstacles()
-{
     m_movingObstacles.clear();
-    for (auto &o : m_movingCircles) {
-        m_movingObstacles.push_back(&o);
-    }
-    for (auto &o : m_movingLines) {
-        m_movingObstacles.push_back(&o);
-    }
-    for (auto &o : m_friendlyRobotObstacles) {
-        m_movingObstacles.push_back(&o);
-    }
+    for (auto &o : m_movingCircles) { m_movingObstacles.push_back(&o); }
+    for (auto &o : m_movingLines) { m_movingObstacles.push_back(&o); }
+    for (auto &o : m_friendlyRobotObstacles) { m_movingObstacles.push_back(&o); }
+    for (auto &o : m_opponentRobotObstacles) { m_movingObstacles.push_back(&o); }
 }
 
 bool WorldInformation::pointInPlayfield(const Vector &point, float radius) const
@@ -132,153 +128,122 @@ void WorldInformation::addFriendlyRobotTrajectoryObstacle(std::vector<Trajectory
     }
     float maxDistSq = 0;
     for (const TrajectoryPoint &p : *obstacle) {
-        maxDistSq = std::max(maxDistSq, p.pos.distanceSq((*obstacle)[0].pos));
+        maxDistSq = std::max(maxDistSq, p.state.pos.distanceSq((*obstacle)[0].state.pos));
     }
     if (maxDistSq < 0.03f * 0.03f) {
-        addCircle(obstacle->at(0).pos.x, obstacle->at(0).pos.y, radius + std::sqrt(maxDistSq), nullptr, prio);
+        addCircle(obstacle->at(0).state.pos.x, obstacle->at(0).state.pos.y, radius + std::sqrt(maxDistSq), nullptr, prio);
         return;
     }
-    MovingObstacles::FriendlyRobotObstacle o(obstacle, radius + m_radius, prio);
+    const Obstacles::FriendlyRobotObstacle o(obstacle, radius + m_radius, prio);
     m_friendlyRobotObstacles.push_back(o);
 }
 
+void WorldInformation::addOpponentRobotObstacle(Vector startPos, Vector speed, int prio)
+{
+    m_opponentRobotObstacles.emplace_back(prio, m_radius, startPos, speed);
+}
+
 // obstacle checking
-bool WorldInformation::isInMovingObstacle(const std::vector<MovingObstacles::MovingObstacle*> &obstacles, Vector point, float time) const
+
+std::vector<Obstacles::Obstacle*> WorldInformation::intersectingObstacles(const Trajectory &trajectory) const
 {
-    if (time >= IGNORE_MOVING_OBSTACLE_THRESHOLD) {
-        return false;
-    }
-    for (const auto o : obstacles) {
-        if (o->intersects(point, time)) {
-            return true;
+    const BoundingBox boundingBox = trajectory.calculateBoundingBox();
+    std::vector<Obstacles::Obstacle*> intersectingObstacles;
+    intersectingObstacles.reserve(m_obstacles.size());
+    std::copy_if(m_obstacles.begin(), m_obstacles.end(), std::back_inserter(intersectingObstacles),
+                 [&boundingBox](auto o) { return o->boundingBox().intersects(boundingBox); });
+    return intersectingObstacles;
+}
+
+bool WorldInformation::isTrajectoryInObstacle(const Trajectory &profile, float timeOffset) const
+{
+    // TODO: field border??
+    const auto obstacles = intersectingObstacles(profile);
+
+    const float totalTime = profile.time();
+    const float timeInterval = 0.025f;
+    const int divisions = std::ceil(totalTime / timeInterval);
+
+    Trajectory::Iterator iterator{profile, timeOffset};
+    for (int i = 0;i<divisions;i++) {
+        const auto point = iterator.next(timeInterval);
+        for (const auto o : obstacles) {
+            if (o->intersects(point)) {
+                return true;
+            }
         }
     }
     return false;
 }
 
-bool WorldInformation::isTrajectoryInObstacle(const SpeedProfile &profile, float timeOffset, Vector startPos) const
+bool WorldInformation::isInStaticObstacle(Vector point) const
 {
-    BoundingBox trajectoryBoundingBox = profile.calculateBoundingBox(startPos);
-    std::vector<const StaticObstacles::Obstacle*> intersectingStaticObstacles;
-    intersectingStaticObstacles.reserve(m_obstacles.size());
-    for (const StaticObstacles::Obstacle *o : m_obstacles) {
-        if (o->boundingBox().intersects(trajectoryBoundingBox)) {
-            intersectingStaticObstacles.push_back(o);
-        }
+    if (!pointInPlayfield(point, m_radius)) {
+        return true;
     }
-    std::vector<MovingObstacles::MovingObstacle*> intersectingMovingObstacles;
-    intersectingMovingObstacles.reserve(m_movingObstacles.size());
-    for (MovingObstacles::MovingObstacle *o : m_movingObstacles) {
-        if (o->boundingBox().intersects(trajectoryBoundingBox)) {
-            intersectingMovingObstacles.push_back(o);
-        }
-    }
-
-    const int DIVISIONS = 40;
-
-    float totalTime = profile.time();
-    std::vector<Vector> trajectoryPoints = profile.trajectoryPositions(startPos, DIVISIONS, totalTime * (1.0f / (DIVISIONS-1)));
-
-    for (int i = 0;i<DIVISIONS;i++) {
-        float time = totalTime * i / float(DIVISIONS-1);
-        if (isInStaticObstacle(intersectingStaticObstacles, trajectoryPoints[i])) {
-            return true;
-        }
-        if (isInMovingObstacle(intersectingMovingObstacles, trajectoryPoints[i], time + timeOffset)) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(m_staticObstacles.cbegin(), m_staticObstacles.cend(), [point](auto o) { return o->distance(point) <= 0; });
 }
 
-float WorldInformation::minObstacleDistancePoint(Vector pos, float time, bool checkStatic, bool checkDynamic) const
+float WorldInformation::minObstacleDistancePoint(const TrajectoryPoint &point) const
 {
     float minDistance = std::numeric_limits<float>::max();
-    // static obstacles
-    if (checkStatic) {
-        for (const auto obstacle : m_obstacles) {
-            float d = obstacle->distance(pos);
-            if (d <= 0) {
-                return d;
-            }
-            minDistance = std::min(minDistance, d);
+    for (const auto o : m_obstacles) {
+        const float d = o->distance(point);
+        if (d <= 0) {
+            return d;
         }
-    }
-    // moving obstacles
-    if (time < IGNORE_MOVING_OBSTACLE_THRESHOLD && checkDynamic) {
-        for (const auto o : m_movingObstacles) {
-            float d = o->distance(pos, time);
-            if (d <= 0) {
-                return d;
-            }
-            minDistance = std::min(minDistance, d);
-        }
+        minDistance = std::min(minDistance, d);
     }
     return minDistance;
 }
 
-std::pair<ZonedIntersection, ZonedIntersection> WorldInformation::minObstacleDistance(const SpeedProfile &profile, float timeOffset, Vector startPos, float safetyMargin) const
+bool WorldInformation::isInFriendlyStopPos(const Vector pos) const
 {
-    float totalTime = profile.time();
-    ZonedIntersection totalIntersection = ZonedIntersection::FAR_AWAY;
-    float lastPointDistance = 0;
+    for (const auto &o : m_friendlyRobotObstacles) {
+        if (o.intersects({{pos, Vector(0, 0)}, 200})) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::pair<float, float> WorldInformation::minObstacleDistance(const Trajectory &profile, float timeOffset, float safetyMargin) const
+{
+    const float totalTime = profile.time();
+    float totalMinDistance = std::numeric_limits<float>::max();
+    float lastPointDistance = std::numeric_limits<float>::max();
 
     const int DIVISIONS = 40;
 
-    std::vector<Vector> trajectoryPoints = profile.trajectoryPositions(startPos, DIVISIONS, totalTime * (1.0f / (DIVISIONS-1)));
-    std::vector<float> trajectoryTimes(DIVISIONS);
+    const auto trajectoryPoints = profile.trajectoryPositions(DIVISIONS, totalTime * (1.0f / (DIVISIONS-1)), timeOffset);
 
-    for (int i = 0;i<DIVISIONS;i++) {
-        float time = totalTime * i * (1.0f / float(DIVISIONS-1));
-        Vector pos = trajectoryPoints[i];
-
-        trajectoryPoints[i] = pos;
-        trajectoryTimes[i] = time + timeOffset;
-
-        if (i == DIVISIONS-1) {
-            float minDistance = minObstacleDistancePoint(pos, time + timeOffset, true, true);
-            if (minDistance < 0) {
-                return {ZonedIntersection::IN_OBSTACLE, ZonedIntersection::IN_OBSTACLE};
-            }
-            lastPointDistance = minDistance;
+    for (int i : {0, DIVISIONS - 1}) {
+        const float minDistance = minObstacleDistancePoint(trajectoryPoints[i]);
+        if (minDistance < 0) {
+            return {minDistance, minDistance};
         }
+        lastPointDistance = std::min(lastPointDistance, minDistance);
     }
 
-    BoundingBox trajectoryBox(trajectoryPoints[0], trajectoryPoints[1]);
-    for (int i = 2;i<DIVISIONS;i++) {
-        trajectoryBox.mergePoint(trajectoryPoints[i]);
-    }
+    BoundingBox trajectoryBox = profile.calculateBoundingBox();
 
     // check if the trajectory is in the playing field
     // this must be done before adding the safety margin to the trajectory bounding box
     if (!pointInPlayfield(Vector(trajectoryBox.left, trajectoryBox.top), m_radius) ||
             !pointInPlayfield(Vector(trajectoryBox.right, trajectoryBox.bottom), m_radius)) {
-        return {ZonedIntersection::IN_OBSTACLE, ZonedIntersection::IN_OBSTACLE};
+        return {-1, -1};
     }
 
     trajectoryBox.addExtraRadius(safetyMargin);
 
     for (auto obstacle : m_obstacles) {
         if (obstacle->boundingBox().intersects(trajectoryBox)) {
-            for (std::size_t i = 0;i<DIVISIONS;i++) {
-                ZonedIntersection intersection = obstacle->zonedDistance(trajectoryPoints[i], safetyMargin);
-                if (intersection == ZonedIntersection::IN_OBSTACLE) {
-                    return {intersection, intersection};
-                } else if (intersection == ZonedIntersection::NEAR_OBSTACLE) {
-                    totalIntersection = intersection;
-                }
-            }
-        }
-    }
-
-    for (auto obstacle : m_movingObstacles) {
-        if (obstacle->boundingBox().intersects(trajectoryBox)) {
-            for (std::size_t i = 0;i<DIVISIONS;i++) {
-                ZonedIntersection intersection = obstacle->zonedDistance(trajectoryPoints[i], trajectoryTimes[i], safetyMargin);
-                if (intersection == ZonedIntersection::IN_OBSTACLE) {
-                    return {intersection, intersection};
-                } else if (intersection == ZonedIntersection::NEAR_OBSTACLE) {
-                    totalIntersection = intersection;
+            for (const auto &point : trajectoryPoints) {
+                const float dist = obstacle->zonedDistance(point, safetyMargin);
+                if (dist < 0) {
+                    return {dist, dist};
+                } else if (dist < safetyMargin) {
+                    totalMinDistance = std::min(dist, totalMinDistance);
                 }
             }
 
@@ -288,12 +253,12 @@ std::pair<ZonedIntersection, ZonedIntersection> WorldInformation::minObstacleDis
                 if (totalTime < AFTER_STOP_AVOIDANCE_TIME) {
                     const float AFTER_STOP_INTERVAL = 0.03f;
                     for (std::size_t i = 0;i<std::size_t((AFTER_STOP_AVOIDANCE_TIME - totalTime) * (1.0f / AFTER_STOP_INTERVAL));i++) {
-                        float t = timeOffset + totalTime + i * AFTER_STOP_INTERVAL;
-                        ZonedIntersection intersection = obstacle->zonedDistance(trajectoryPoints.back(), t, safetyMargin);
-                        if (intersection == ZonedIntersection::IN_OBSTACLE) {
-                            return {intersection, intersection};
-                        } else if (intersection == ZonedIntersection::NEAR_OBSTACLE) {
-                            totalIntersection = intersection;
+                        const float t = timeOffset + totalTime + i * AFTER_STOP_INTERVAL;
+                        const float dist = obstacle->zonedDistance({trajectoryPoints.back().state, t}, safetyMargin);
+                        if (dist < 0) {
+                            return {dist, dist};
+                        } else if (dist < safetyMargin) {
+                            totalMinDistance = std::min(dist, totalMinDistance);
                         }
                     }
                 }
@@ -301,16 +266,12 @@ std::pair<ZonedIntersection, ZonedIntersection> WorldInformation::minObstacleDis
         }
     }
 
-    ZonedIntersection lastPointIntersection = lastPointDistance < safetyMargin ? ZonedIntersection::NEAR_OBSTACLE : ZonedIntersection::FAR_AWAY;
-    return {totalIntersection, lastPointIntersection};
+    return {totalMinDistance, lastPointDistance};
 }
 
 void WorldInformation::serialize(pathfinding::WorldState *state) const
 {
-    for (auto obstacle : qAsConst(m_obstacles)) {
-        obstacle->serialize(state->add_obstacles());
-    }
-    for (auto obstacle : m_movingObstacles) {
+    for (auto obstacle : m_obstacles) {
         obstacle->serialize(state->add_obstacles());
     }
     state->set_out_of_field_priority(outOfFieldPriority());
@@ -327,26 +288,29 @@ void WorldInformation::deserialize(const pathfinding::WorldState &state)
 
     for (const auto &obstacle : state.obstacles()) {
         if (obstacle.has_circle()) {
-            StaticObstacles::Circle circle(obstacle, obstacle.circle());
+            const Obstacles::Circle circle(obstacle, obstacle.circle());
             m_circleObstacles.push_back(circle);
         } else if (obstacle.has_triangle()) {
-            StaticObstacles::Triangle triangle(obstacle, obstacle.triangle());
+            const Obstacles::Triangle triangle(obstacle, obstacle.triangle());
             m_triangleObstacles.push_back(triangle);
         } else if (obstacle.has_line()) {
-            StaticObstacles::Line line(obstacle, obstacle.line());
+            const Obstacles::Line line(obstacle, obstacle.line());
             m_lineObstacles.push_back(line);
         } else if (obstacle.has_rectangle()) {
-            StaticObstacles::Rect rect(obstacle, obstacle.rectangle());
+            const Obstacles::Rect rect(obstacle, obstacle.rectangle());
             m_rectObstacles.push_back(rect);
         } else if (obstacle.has_moving_circle()) {
-            MovingObstacles::MovingCircle circle(obstacle, obstacle.moving_circle());
+            const Obstacles::MovingCircle circle(obstacle, obstacle.moving_circle());
             m_movingCircles.push_back(circle);
         } else if (obstacle.has_moving_line()) {
-            MovingObstacles::MovingLine line(obstacle, obstacle.moving_line());
+            const Obstacles::MovingLine line(obstacle, obstacle.moving_line());
             m_movingLines.push_back(line);
         } else if (obstacle.has_friendly_robot()) {
-            MovingObstacles::FriendlyRobotObstacle robot(obstacle, obstacle.friendly_robot());
+            const Obstacles::FriendlyRobotObstacle robot(obstacle, obstacle.friendly_robot());
             m_friendlyRobotObstacles.push_back(robot);
+        } else if (obstacle.has_opponent_robot()) {
+            const Obstacles::OpponentRobotObstacle robot(obstacle, obstacle.opponent_robot());
+            m_opponentRobotObstacles.push_back(robot);
         } else {
             qDebug() <<"Invalid or unknown obstacle";
         }
@@ -362,6 +326,6 @@ void WorldInformation::deserialize(const pathfinding::WorldState &state)
         m_robotId = state.robot_id();
     }
     if (state.has_boundary()) {
-        m_boundary = StaticObstacles::Rect(pathfinding::Obstacle(), state.boundary());
+        m_boundary = Obstacles::Rect(pathfinding::Obstacle(), state.boundary());
     }
 }

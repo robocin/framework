@@ -25,6 +25,9 @@
 #include <QDir>
 #include <QIcon>
 #include <QCommandLineParser>
+#include <QDebug>
+#include <QStyle>
+#include <QStyleFactory>
 
 int main(int argc, char* argv[])
 {
@@ -53,7 +56,10 @@ int main(int argc, char* argv[])
     parser.process(app);
 
     MainWindow window(parser.isSet(tournamentOption), true);
+
     window.show();
+
+    // qApp->setStyleSheet("");
 
     return app.exec();
 }

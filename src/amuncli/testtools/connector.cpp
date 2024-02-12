@@ -47,7 +47,7 @@ Connector::Connector(QObject *parent) :
     QObject(parent),
     m_backlogWriter(20)
 {
-    connect(this, SIGNAL(saveBacklogFile(QString, Status, bool)), &m_backlogWriter, SLOT(saveBacklog(QString, Status, bool)));
+    connect(this, SIGNAL(saveBacklogFile(QString, bool)), &m_backlogWriter, SLOT(saveBacklog(QString, bool)));
     connect(this, SIGNAL(backlogStatus(Status)), &m_backlogWriter, SLOT(handleStatus(Status)));
     connect(&m_backlogWriter, SIGNAL(finishedBacklogSave()), this, SLOT(continueAmun()));
     connect(&m_referee, SIGNAL(sendCommand(Command)), this, SIGNAL(sendCommand(Command)));
@@ -62,7 +62,7 @@ void Connector::compileStrategy(QCoreApplication &app, QString initScript)
     setIsInCompileMode(true);
     Timer timer;
     timer.setTime(0, 1.0);
-    std::shared_ptr<GameControllerConnection> connection(new GameControllerConnection(false));
+    auto connection = std::make_shared<StrategyGameControllerMediator>(false);
     CompilerRegistry compilerRegistry;
     Strategy strategy(&timer, StrategyType::YELLOW, nullptr, &compilerRegistry, connection);
 
@@ -186,8 +186,7 @@ void Connector::setRobotConfiguration(int numRobots, const QString &generation)
         yellow.add_robot()->CopyFrom(gen.default_());
         yellow.mutable_robot(i)->set_id(i);
         blue.add_robot()->CopyFrom(gen.default_());
-        // do not duplicate IDs, amun can not control two robots with the same id
-        blue.mutable_robot(i)->set_id(i + numRobots);
+        blue.mutable_robot(i)->set_id(i > 15 ? i : (15 - i));
     }
 
     Command command(new amun::Command);
@@ -237,15 +236,22 @@ void Connector::start()
         }
 
     }
+    if (m_forceStart) {
+        m_referee.changeCommand(SSL_Referee::FORCE_START);
+    }
     emit sendCommand(command);
 }
 
-void Connector::handleStrategyStatus(const amun::StatusStrategy &strategy)
+void Connector::handleStrategyStatus(const amun::StatusStrategy &strategy, qint64 time)
 {
     if (strategy.state() == amun::StatusStrategy::FAILED) {
         const auto& it = std::find_if_not(m_options.begin(), m_options.end(), [](const std::pair<std::string, OptionInfo>& p){ return p.second.hasBeenFlipped; });
         if (m_exitCode != 0 || it == m_options.end()) {
-            delayedExit(m_exitCode);
+            if (m_backlogDir != "") {
+                m_backlogList.push_back({time, "STRATEGY_CRASH"});
+            } else {
+                delayedExit(m_exitCode);
+            }
         } else {
             std::cout << "Rerunning with option \"" << it->first <<"\" set to "<<(!it->second.value ? "true" : "false")<< std::endl;
             it->second.hasBeenFlipped = true;
@@ -275,11 +281,21 @@ void Connector::sendFlipOption(const std::string &name)
     emit sendCommand(command);
 }
 
+void Connector::reportEvents()
+{
+    if (m_reportEvents) {
+        std::cout <<std::endl<<"Events:"<<std::endl;
+        auto eventTypeDesc = gameController::GameEvent::Type_descriptor();
+        for (auto el : m_eventCounter) {
+            std::cout <<eventTypeDesc->FindValueByNumber(el.first)->name()<<": "<<el.second<<std::endl;
+        }
+        m_reportEvents = false;
+    }
+}
+
 void Connector::handleStatus(const Status &status)
 {
     emit backlogStatus(status);
-
-//    qDebug() <<QString::fromStdString(status->DebugString());
 
     m_logfile.writeStatus(status);
 
@@ -298,8 +314,19 @@ void Connector::handleStatus(const Status &status)
             if (m_debug) {
                 TestTools::dumpProtobuf(*status);
             }
+            if (!m_isSilent) {
+                TestTools::dumpLog(debug, m_exitCode);
 
-            TestTools::dumpLog(debug, m_exitCode);
+                // allow the strategy/autoref/pathfinding... to create backlogs by printing logging a string like "amun.requestBacklog(INTERNAL_ERROR)"
+                for (const amun::StatusLog &entry: debug.log()) {
+                    const QString line = QString::fromStdString(entry.text());
+                    const QRegExp regex("amuncli\\.requestBacklog\\((.*)\\)$");
+                    if (regex.indexIn(line) != -1) {
+                        const QString errorName = regex.capturedTexts().at(1);
+                        m_backlogList.push_back({status->time(), errorName});
+                    }
+                }
+            }
         }
     }
 
@@ -316,23 +343,14 @@ void Connector::handleStatus(const Status &status)
 
     if (status->has_status_strategy()) {
         const auto& strategy = status->status_strategy().status();
-        handleStrategyStatus(strategy);
+        handleStrategyStatus(strategy, status->time());
     }
 
     if (m_simulationStartTime == 0) {
         m_simulationStartTime = status->time();
     }
     if (status->time() - m_simulationStartTime >= m_simulationRunningTime) {
-
-        if (m_reportEvents) {
-            std::cout <<std::endl<<"Events:"<<std::endl;
-            auto eventTypeDesc = gameController::GameEvent::Type_descriptor();
-            for (auto el : m_eventCounter) {
-                std::cout <<eventTypeDesc->FindValueByNumber(el.first)->name()<<": "<<el.second<<std::endl;
-            }
-            m_reportEvents = false;
-        }
-
+        reportEvents();
         delayedExit(0);
     }
 
@@ -360,6 +378,11 @@ void Connector::handleStatus(const Status &status)
         auto p = m_backlogList.first();
         m_backlogList.pop_front();
         stopAmunAndSaveBacklog(p.second);
+
+        if (p.second == "STRATEGY_CRASH") {
+            reportEvents();
+            delayedExit(m_exitCode);
+        }
     }
 }
 
@@ -383,7 +406,7 @@ void Connector::stopAmunAndSaveBacklog(QString directory) {
 
     const QString date = CombinedLogWriter::dateTimeToString(QDateTime::currentDateTime()).replace(":", "");
     QString pathName = fullDir.path() + QString("/backlog%1.log").arg(date);
-    emit saveBacklogFile(pathName, m_teamStatus, false);
+    emit saveBacklogFile(pathName/*, m_teamStatus*/, false);
 }
 
 void Connector::continueAmun()

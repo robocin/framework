@@ -24,13 +24,19 @@ add_subdirectory(logcutter)
 add_subdirectory(plotter)
 add_subdirectory(widgets)
 
-add_library(ra-horus
+add_library(ra-horus STATIC
     aboutus.cpp
     aboutus.h
+	custompalettewidget.cpp
+	custompalettewidget.h
     configdialog.cpp
     configdialog.h
     inputwidget.cpp
     inputwidget.h
+    gitinfodialog.cpp
+    gitinfodialog.h
+    gitinfowidget.cpp
+    gitinfowidget.h
     mainwindow.cpp
     mainwindow.h
     refereewidget.cpp
@@ -55,6 +61,8 @@ add_library(ra-horus
     savedirectorydialog.h
     strategysearch.cpp
     strategysearch.h
+    strategyselectionwidget.cpp
+    strategyselectionwidget.h
     logopener.cpp
     logopener.h
     refereeinfowidget.cpp
@@ -65,12 +73,17 @@ add_library(ra-horus
     loggingsuite.cpp
     logfileselectiondialog.cpp
     logfileselectiondialog.h
+    fieldparameters.cpp
+    fieldparameters.h
 )
 
 set(UI_SOURCES
     aboutus.ui
+	custompalettewidget.ui
     configdialog.ui
     inputwidget.ui
+    gitinfodialog.ui
+    gitinfowidget.ui
     mainwindow.ui
     refereewidget.ui
     robotselectionwidget.ui
@@ -79,8 +92,10 @@ set(UI_SOURCES
     simulatorwidget.ui
     simulatorconfigwidget.ui
     savedirectorydialog.ui
+    strategyselectionwidget.ui
     refereeinfowidget.ui
     logfileselectiondialog.ui
+    fieldparameters.ui
 )
 
 qt5_wrap_ui(UIC_SOURCES ${UI_SOURCES})
@@ -111,6 +126,10 @@ target_include_directories(ra-horus
 )
 
 target_compile_definitions(ra-horus PRIVATE GAMECONTROLLER_RELEASE_VERSION="${GAMECONTROLLER_RELEASE_VERSION}")
+
+if(${EASY_MODE})
+	target_compile_definitions(ra-horus PRIVATE EASY_MODE)
+endif()
 
 add_library(ra::ra-horus ALIAS ra-horus)
 

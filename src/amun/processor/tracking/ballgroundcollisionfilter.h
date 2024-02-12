@@ -31,48 +31,71 @@
 class BallGroundCollisionFilter : public AbstractBallFilter
 {
 public:
-    explicit BallGroundCollisionFilter(const VisionFrame &frame, CameraInfo* cameraInfo, const FieldTransform &transform);
+    explicit BallGroundCollisionFilter(const VisionFrame &frame, CameraInfo* cameraInfo,
+                                       const FieldTransform &transform, const world::BallModel &ballModel);
     BallGroundCollisionFilter(const BallGroundCollisionFilter& filter, qint32 primaryCamera);
 
     void processVisionFrame(const VisionFrame& frame) override;
-    bool acceptDetection(const VisionFrame& frame) override;
-    void writeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &robots) override;
-    std::size_t chooseBall(const std::vector<VisionFrame> &frames) override;
+    void writeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &robots, qint64 lastCameraFrameTime) override;
+    int chooseDetection(const std::vector<VisionFrame> &frames) const override;
 
     bool isFeasiblyInvisible() const { return m_feasiblyInvisible; };
+    float getMaxSpeed() const { return m_maxSpeed; }
 
 private:
     struct BallOffsetInfo {
+        BallOffsetInfo(Eigen::Vector2f projectedBallPos, const RobotInfo &robot, bool forceDribbling, bool intersecting);
+
         Eigen::Vector2f ballOffset;
         // the position the ball would be in assuming the robot does not dribble (but possibly pushes the ball)
         Eigen::Vector2f pushingBallPos;
+        Eigen::Vector2f stopDribblingPos;
         int robotIdentifier;
+        bool forceDribbleMode;
+        bool isIntersecting;
+        bool dribblerActive;
     };
 
 private:
-    void computeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &robots);
-    BallOffsetInfo getDribblingInfo(Eigen::Vector2f projectedBallPos, const RobotInfo &robot);
-    bool checkFeasibleInvisibility(const QVector<RobotInfo> &robots);
+    void computeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &robots, qint64 lastCameraFrameTime);
+    bool checkFeasibleInvisibility(const QVector<RobotInfo> &robots) const;
+    bool handleDribbling(world::Ball *ball, const QVector<RobotInfo> &robots, bool overwriteBallSpeed) const;
+    bool checkBallRobotIntersection(world::Ball *ball, const RobotInfo &robot, bool overwriteBallSpeed,
+                                    const Eigen::Vector2f pastPos, const Eigen::Vector2f currentPos) const;
+    void updateDribbling(const QVector<RobotInfo> &robots);
+    void updateDribbleAndRotate(const VisionFrame &frame);
+    void updateMaxSpeed(const VisionFrame &frame, float lastSpeedLength, Eigen::Vector2f lastPos);
+    void checkVolleyShot(const VisionFrame &frame);
+    void updateEmptyFrame(qint64 frameTime, const QVector<RobotInfo> &robots);
+    bool isBallCloseToRobotShadow(const VisionFrame &frame) const;
+    void resetFilter(const VisionFrame &frame);
 
 private:
     GroundFilter m_groundFilter;
-    GroundFilter m_pastFilter;
-    qint64 m_lastVisionTime;
-    std::optional<BallOffsetInfo> m_localBallOffset;
-    std::optional<BallOffsetInfo> m_insideRobotOffset;
+    qint64 m_lastUpdateTime = 0;
+    // is always at the time of m_lastUpdateTime
+    world::Ball m_pastBallState;
+    std::optional<BallOffsetInfo> m_dribbleOffset;
     Eigen::Vector2f m_lastReportedBallPos = Eigen::Vector2f(10000000, 0);
     bool m_feasiblyInvisible = false;
-    bool m_resetFilters = false;
-    std::optional<VisionFrame> m_lastVisionFrame;
-    qint64 m_lastResetTime = 0;
+    VisionFrame m_lastVisionFrame;
+    int m_invisibleFrames = 0;
+
+    // volley shot detection
+    bool m_hadRobotIntersection = false;
     float m_lastValidSpeed = 0;
 
     // dribble and rotate
     qint32 m_inDribblerFrames = 0;
-    BallOffsetInfo m_lastDribbleOffset;
+    std::optional<BallOffsetInfo> m_rotateAndDribbleOffset;
 
-    const float ROBOT_RADIUS = 0.09f;
-    const float ROBOT_HEIGHT = 0.15f;
+    // ball shot speed detection
+    float m_maxSpeed = 0;
+    int m_framesDecelerating = 0;
+    bool m_ballWasNearRobot = false;
+    float m_highestSpeed = 0;
+
+    const float DRIBBLING_ROBOT_VISIBILITY_FACTOR = 1.03f;
 };
 
 #endif // BALLGROUNDCOLLISIONFILTER_H

@@ -30,7 +30,6 @@
 #include "widgets/refereestatuswidget.h"
 #include "savedirectorydialog.h"
 #include "logcutter/logcutter.h"
-#include "protobuf/geometry.h"
 #include "logopener.h"
 #include "loglabel.h"
 #include "logfileselectiondialog.h"
@@ -51,6 +50,7 @@
 #include <QUrl>
 #include <QMessageBox>
 #include <QInputDialog>
+#include <QTabBar>
 
 MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     QMainWindow(parent),
@@ -83,6 +83,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     ui->actionPlotter->setIcon(QIcon("icon:32/plotter.png"));
     ui->actionConfiguration->setIcon(QIcon("icon:32/preferences-system.png"));
     ui->actionAboutUs->setIcon(QIcon("icon:question.svg"));
+    ui->actionGitInfo->setIcon(QIcon("icon:git-icon.svg"));
 
     ui->actionQuit->setShortcut(QKeySequence::Quit);
 
@@ -125,8 +126,15 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(m_inputManager, SIGNAL(sendRefereeCommand(SSL_Referee::Command)), m_internalReferee, SLOT(changeCommand(SSL_Referee::Command)));
     ui->input->init(m_inputManager);
 
+    connect(ui->strategies, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
+    ui->strategies->init(this);
+
     connect(ui->robots, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
+#ifdef EASY_MODE
+    ui->robots->setIsSimulator(true);
+#else
     connect(ui->actionSimulator, SIGNAL(toggled(bool)), ui->robots, SLOT(setIsSimulator(bool)));
+#endif
     ui->robots->init(this, m_inputManager);
 
     connect(ui->simulator, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
@@ -135,15 +143,14 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
 
     m_configDialog = new ConfigDialog(this);
     connect(m_configDialog, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
-    connect(m_configDialog, SIGNAL(useDarkModeColors(bool)), ui->referee, SLOT(setStyleSheets(bool)));
-    connect(m_configDialog, SIGNAL(useDarkModeColors(bool)), ui->refereeinfo, SLOT(setStyleSheets(bool)));
-    connect(m_configDialog, SIGNAL(useDarkModeColors(bool)), ui->robots, SIGNAL(setUseDarkColors(bool)));
-    connect(m_configDialog, SIGNAL(useDarkModeColors(bool)), ui->replay, SIGNAL(setUseDarkColors(bool)));
     connect(m_configDialog, SIGNAL(useNumKeysForReferee(bool)), this, SLOT(udpateSpeedActionsEnabled()));
+    connect(m_configDialog, SIGNAL(setPalette(QPalette)), this, SLOT(updatePalette(QPalette)));
 
     m_aboutUs = new AboutUs(this);
+    m_gitInfo = new GitInfoDialog(this);
 
     connect(ui->options, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
+    connect(ui->fieldParameters, &FieldParameters::sendCommand, this, &MainWindow::sendCommand);
 
     ui->blueDebugger->setStrategy(amun::DebugSource::StrategyBlue);
     connect(ui->blueDebugger, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
@@ -166,11 +173,16 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(m_robotCtrlClickAction, SIGNAL(setDebugFilterString(QString)), ui->debugTree, SLOT(setFilter(QString)));
     connect(m_robotCtrlClickAction, SIGNAL(toggleVisualization(QString)), ui->visualization, SLOT(toggleVisualization(QString)));
 
+    connect(m_configDialog, &ConfigDialog::setScrollSensitivity,
+            ui->field, &FieldWidget::setScrollSensitivity);
+
     // setup visualization only parts of the ui
     connect(ui->visualization, SIGNAL(itemsChanged(QStringList)), ui->field, SLOT(visualizationsChanged(QStringList)));
 
     m_plotter = new Plotter();
     connect(m_plotter, SIGNAL(spacePressed()), this, SLOT(togglePause()));
+
+    connect(ui->debugTree, SIGNAL(triggerBreakpoint()), SLOT(pauseAll()));
 
     // connect the menu actions
     connect(ui->actionEnableTransceiver, SIGNAL(toggled(bool)), SLOT(setTransceiver(bool)));
@@ -184,6 +196,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
 
     connect(ui->actionConfiguration, SIGNAL(triggered()), SLOT(showConfigDialog()));
     connect(ui->actionAboutUs, SIGNAL(triggered()), m_aboutUs, SLOT(exec()));
+    connect(ui->actionGitInfo, SIGNAL(triggered()), m_gitInfo, SLOT(show()));
     connect(ui->actionPlotter, SIGNAL(triggered()), this, SLOT(showPlotter()));
     connect(ui->actionAutoPause, SIGNAL(toggled(bool)), ui->simulator, SLOT(setEnableAutoPause(bool)));
     connect(ui->actionUseLocation, SIGNAL(toggled(bool)), this, SLOT(useLogfileLocation(bool)));
@@ -200,9 +213,6 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(ui->actionStepBack, SIGNAL(triggered()), ui->logManager, SIGNAL(stepBackward()));
     connect(ui->actionStepForward, SIGNAL(triggered()), ui->logManager, SIGNAL(stepForward()));
     connect(ui->actionTogglePause, SIGNAL(triggered()), ui->logManager, SIGNAL(togglePaused()));
-
-    connect(ui->referee, SIGNAL(enableInternalAutoref(bool)), ui->robots, SIGNAL(enableInternalAutoref(bool)));
-    connect(ui->actionInternalReferee, SIGNAL(toggled(bool)), ui->robots, SIGNAL(enableInternalAutoref(bool)));
 
     // setup data distribution
     connect(this, SIGNAL(gotStatus(Status)), ui->field, SLOT(handleStatus(Status)));
@@ -223,6 +233,8 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(this, SIGNAL(gotStatus(Status)), ui->logManager, SLOT(handleStatus(Status)));
     connect(this, SIGNAL(gotStatus(Status)), ui->replay, SIGNAL(gotStatus(Status)));
     connect(this, &MainWindow::gotStatus, m_logTimeLabel, &LogLabel::handleStatus);
+    connect(this, &MainWindow::gotStatus, m_gitInfo, &GitInfoDialog::handleStatus);
+    connect(this, &MainWindow::gotStatus, ui->fieldParameters, &FieldParameters::handleStatus);
 
     connect(ui->field, &FieldWidget::selectRobots, ui->robots, &RobotSelectionWidget::selectRobots);
 
@@ -241,7 +253,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     // find all simulator configuration files
     QDirIterator dirIterator(QString(ERFORCE_CONFDIR) + "simulator", {"*.txt"}, QDir::AllEntries | QDir::NoSymLinks | QDir::NoDotAndDotDot);
     m_simulatorSetupGroup = new QActionGroup(this);
-    QString selectedFile = s.value("Simulator/SetupFile").toString();
+    QString selectedFile = s.value("Simulator/SetupFile", "2020").toString();
     QAction *selectedAction = nullptr;
     while (dirIterator.hasNext()) {
         QFileInfo file(dirIterator.next());
@@ -263,19 +275,9 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
         simulatorSetupChanged(selectedAction);
     }
 
-    // restore configuration and initialize everything
-    ui->input->load();
-    ui->robots->load();
-    ui->visualization->load();
-    m_configDialog->load();
-    ui->referee->load();
-    ui->simulatorConfig->load();
-
     // hide options dock by default
     ui->dockOptions->hide();
 
-    const uint INITIAL_CONFIG_ID = isRa ? 1 : 2;
-    loadConfig(true, INITIAL_CONFIG_ID);
     // switch configuration keys
     QSignalMapper *switchConfigMapper = new QSignalMapper(this);
     for (uint i = 0;i<10;i++) {
@@ -299,6 +301,24 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
 
     ui->actionEnableTransceiver->setChecked(ui->actionSimulator->isChecked() ? m_transceiverSimulator : m_transceiverRealWorld);
     ui->actionChargeKicker->setChecked(ui->actionSimulator->isChecked() ? m_chargeSimulator : m_chargeRealWorld);
+
+    // restore configuration and initialize everything
+    ui->input->load();
+    ui->visualization->load();
+    m_configDialog->load();
+    ui->simulatorConfig->load();
+    ui->robots->loadRobots();
+    // HACK: wait for a short time before loading the strategies and autoref
+    // This is to prevent repeated reloading of the strategies.
+    // Since the reloading takes more time than 10ms, this is an overall win when starting Ra.
+    // It is necessary since the geometry updates have to propagate through multiple threads
+    // while the strategy load commands are directly moved to the strategy threads.
+    // Therefore, they can arrive before the geometry changes, leading to strategy reloads.
+    QThread::msleep(10);
+    // WARNING: these two loads must always be the last and in this exact order
+    // Only then is the number of strategy reloads minimized
+    ui->referee->load();
+    ui->strategies->loadStrategies();
 
     // playback speed shortcuts
     QSignalMapper *mapper = new QSignalMapper(this);
@@ -326,6 +346,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), this, SLOT(saveConfig()));
     connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), ui->input, SLOT(saveConfig()));
     connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), ui->referee, SLOT(saveConfig()));
+    connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), ui->strategies, SLOT(saveConfig()));
     connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), ui->robots, SLOT(saveConfig()));
     connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), ui->field, SLOT(saveConfig()));
     connect(ui->actionSaveConfiguration, SIGNAL(triggered(bool)), ui->timing, SLOT(saveConfig()));
@@ -353,7 +374,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
 
     setAcceptDrops(true);
 
-    ui->replay->setRecentScriptList(ui->robots->recentScriptsList());
+    ui->replay->setRecentScriptList(ui->strategies->recentScriptsList());
     connect(ui->replay, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
     connect(ui->logManager, &LogSlider::sendCommand, this, &MainWindow::sendCommand);
     connect(&m_amun, SIGNAL(gotStatus(Status)), SLOT(handleStatus(Status)));
@@ -364,8 +385,32 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     // setup data distribution
     connect(this, SIGNAL(gotStatus(Status)), m_logOpener, SLOT(handleStatus(Status)));
 
+    const uint INITIAL_CONFIG_ID = isRa ? 1 : 2;
     switchToWidgetConfiguration(INITIAL_CONFIG_ID, true);
     udpateSpeedActionsEnabled();
+
+#ifdef EASY_MODE
+    ui->actionSimulator->setChecked(true);
+    ui->actionSimulator->setEnabled(false);
+    ui->actionInternalReferee->setChecked(true);
+    ui->actionInternalReferee->setEnabled(false);
+    ui->actionInputDevices->setChecked(true);
+    ui->actionInputDevices->setEnabled(true);
+    ui->actionChargeKicker->setChecked(true);
+    ui->actionChargeKicker->setEnabled(false);
+    ui->actionEnableTransceiver->setChecked(true);
+    ui->actionEnableTransceiver->setEnabled(false);
+#endif
+
+    showMaximized();
+
+    const int backgroundValue = palette().brush(QPalette::Window).color().value();
+    const int foregroundValue = palette().brush(QPalette::WindowText).color().value();
+    const bool isDarkMode = backgroundValue < foregroundValue;
+    ui->referee->setStyleSheets(isDarkMode);
+    ui->refereeinfo->setStyleSheets(isDarkMode);
+    ui->strategies->setUseDarkColors(isDarkMode);
+    ui->replay->setUseDarkColors(isDarkMode);
 }
 
 MainWindow::~MainWindow()
@@ -384,7 +429,7 @@ void MainWindow::closeEvent(QCloseEvent *e)
     m_plotter->close();
 
     // unblock stopped strategies
-    ui->robots->shutdown();
+    ui->strategies->shutdown();
     ui->referee->shutdownInternalAutoref();
 
     QMainWindow::closeEvent(e);
@@ -408,6 +453,17 @@ void MainWindow::togglePause()
         ui->simulator->toggleSimulatorRunning();
     } else {
         ui->actionTogglePause->trigger();
+    }
+}
+
+void MainWindow::pauseAll()
+{
+    if (m_currentWidgetConfiguration % 2 == 1) {
+        if (ui->actionSimulator->isChecked()) {
+            ui->simulator->stop();
+        }
+    } else {
+        ui->logManager->pause();
     }
 }
 
@@ -490,13 +546,61 @@ void MainWindow::loadConfig(bool doRestoreGeometry, uint configId)
         restoreGeometry(s.value("Geometry").toByteArray());
     }
     if (s.value("State").isNull()) {
-        tabifyDockWidget(ui->dockSimulator, ui->dockInput);
-        tabifyDockWidget(ui->dockInput, ui->dockVisualization);
-        tabifyDockWidget(ui->dockRobots, ui->dockBlueDebugger);
-        tabifyDockWidget(ui->dockRobots, ui->dockYellowDebugger);
 
-        ui->dockBlueDebugger->close();
-        ui->dockYellowDebugger->close();
+        // The intention here is to first hide all the widgets and then only show the ones that should be part of the default configuration.
+        // Since there seems to be no elegant way to hide all the QDockWidgets this for loop with dynamic_casts will have to do.
+        // The alternative would be to manually hide all the widgets that we don't want to show as a default, but then we would have to
+        // manually add this every time we create a new widget.
+        for (const auto child : children()) {
+            const auto childWidget = dynamic_cast<QDockWidget*>(child);
+            if (childWidget != nullptr) {
+                // Toolbars should not be hidden
+                const auto childToolBar = dynamic_cast<QToolBar*>(child);
+                if (childToolBar == nullptr) {
+                    childWidget->hide();
+                }
+            }
+        }
+
+        if (configId % 2 == 1) {
+            // ra config
+            tabifyDockWidget(ui->dockVisualization, ui->dockSimulator);
+            tabifyDockWidget(ui->dockSimulator, ui->dockSimConfig);
+            tabifyDockWidget(ui->dockRobots, ui->dockReferee);
+
+            ui->dockSimulator->show();
+            ui->dockSimConfig->show();
+            ui->dockVisualization->show();
+
+            ui->dockStrategy->show();
+            ui->dockReferee->show();
+            ui->dockRobots->show();
+
+            ui->dockTiming->show();
+        } else {
+            // horus config
+            ui->dockVisualization->show();
+            ui->dockReplay->show();
+        }
+
+        const auto width = ui->splitterH->size().width();
+        const auto debugTreeWidth = width / 5;
+        const auto fieldWidgetWidth = width - debugTreeWidth;
+        ui->splitterH->setSizes({debugTreeWidth, fieldWidgetWidth});
+
+        const auto height = ui->splitterV->size().width();
+        const auto consoleHeight = height / 5;
+        const auto fieldWidgetHeight = height - consoleHeight;
+        ui->splitterV->setSizes({fieldWidgetHeight, consoleHeight});
+
+        // This selects the uppermost Tab of the tabifiedDockWidgets
+        // Sadly has to be after the show calls, because currentIndex refers to the visible widgets
+        for (const auto child : children()) {
+            const auto childTabBar = dynamic_cast<QTabBar*>(child);
+            if (childTabBar != nullptr) {
+                childTabBar->setCurrentIndex(0);
+            }
+        }
     }
     restoreState(s.value("State").toByteArray());
     ui->splitterV->restoreState(s.value("SplitterV").toByteArray());
@@ -713,6 +817,7 @@ void MainWindow::requestUidInsertWindow()
 
 void MainWindow::sendCommand(const Command &command)
 {
+    m_gitInfo->handleCommand(command);
     emit m_amun.sendCommand(command);
 }
 
@@ -720,6 +825,12 @@ void MainWindow::setSimulatorEnabled(bool enabled)
 {
     ui->actionEnableTransceiver->setChecked(ui->actionSimulator->isChecked() ? m_transceiverSimulator : m_transceiverRealWorld);
     ui->actionChargeKicker->setChecked(ui->actionSimulator->isChecked() ? m_chargeSimulator : m_chargeRealWorld);
+
+    if (enabled) {
+        ui->actionDisableTransceiver->setShortcut(QKeySequence());
+    } else {
+        ui->actionDisableTransceiver->setShortcut(QKeySequence(Qt::Key_Escape));
+    }
 
     udpateSpeedActionsEnabled();
 
@@ -742,7 +853,7 @@ void MainWindow::setInternalRefereeEnabled(bool enabled)
         ui->dockReferee->setVisible(true);
     }
     // force auto reload of strategies if external referee is used
-    ui->robots->forceAutoReload(!enabled);
+    ui->strategies->forceAutoReload(!enabled);
     ui->referee->forceAutoReload(!enabled);
 
     ui->field->internalRefereeEnabled(enabled);
@@ -841,7 +952,11 @@ void MainWindow::horusMode()
 
 void MainWindow::toggleHorusModeWidgets(bool enable)
 {
+#ifdef EASY_MODE
+    ui->actionGoLive->setEnabled(false);
+#else
     ui->actionGoLive->setEnabled(enable);
+#endif
     ui->actionFrameBack->setEnabled(enable);
     ui->actionFrameForward->setEnabled(enable);
     ui->actionStepBack->setEnabled(enable);
@@ -851,6 +966,7 @@ void MainWindow::toggleHorusModeWidgets(bool enable)
     ui->referee->setEnabled(!enable);
     ui->simulator->setEnabled(!enable);
     ui->simulatorConfig->setEnabled(!enable);
+    ui->strategies->enableContent(!enable);
     ui->robots->enableContent(!enable);
     ui->actionRecordLogLog->setEnabled(enable);
     ui->actionRecordLogLog->setVisible(enable);
@@ -956,4 +1072,14 @@ void MainWindow::changeDivision(world::Geometry::Division division) {
             updateSimulatorSetup("simulator/2020B");
             break;
     }
+}
+
+void MainWindow::updatePalette(QPalette palette) {
+    const int backgroundValue = palette.brush(QPalette::Window).color().value();
+    const int foregroundValue = palette.brush(QPalette::WindowText).color().value();
+    const bool isDarkMode = backgroundValue < foregroundValue;
+    ui->referee->setStyleSheets(isDarkMode);
+    ui->refereeinfo->setStyleSheets(isDarkMode);
+    ui->strategies->setUseDarkColors(isDarkMode);
+    ui->replay->setUseDarkColors(isDarkMode);
 }

@@ -35,7 +35,7 @@ public:
     bool isRadiusValid() { return m_radius >= 0.f; }
     void setBoundary(float x1, float y1, float x2, float y2);
     float radius() const { return m_radius; }
-    const StaticObstacles::Rect &boundary() const { return m_boundary; }
+    const Obstacles::Rect &boundary() const { return m_boundary; }
     void setOutOfFieldObstaclePriority(int prio) { m_outOfFieldPriority = prio; }
     int outOfFieldPriority() const { return m_outOfFieldPriority; }
     void setRobotId(int id) { m_robotId = id; }
@@ -44,9 +44,9 @@ public:
     // world obstacles
     void clearObstacles();
     // only valid after a call to collectObstacles, may become invalid after the calling function returns!
-    QVector<const StaticObstacles::Obstacle*> &obstacles() const { return m_obstacles; }
-    void addToAllStaticObstacleRadius(float additionalRadius);
-    const std::vector<MovingObstacles::MovingObstacle*> &movingObstacles() const { return m_movingObstacles; }
+    const QVector<const Obstacles::StaticObstacle*> &staticObstacles() const { return m_staticObstacles; }
+    const std::vector<Obstacles::Obstacle*> &movingObstacles() const { return m_movingObstacles; }
+    const std::vector<Obstacles::Obstacle*> &obstacles() const { return m_obstacles; }
 
     // static obstacles
     void addCircle(float x, float y, float radius, const char *name, int prio);
@@ -54,35 +54,25 @@ public:
     void addRect(float x1, float y1, float x2, float y2, const char *name, int prio, float radius);
     void addTriangle(float x1, float y1, float x2, float y2, float x3, float y3, float lineWidth, const char *name, int prio);
 
-    void collectObstacles() const;
+    void collectObstacles();
     bool pointInPlayfield(const Vector &point, float radius) const;
 
     // moving obstacles
     void addMovingCircle(Vector startPos, Vector speed, Vector acc, float startTime, float endTime, float radius, int prio);
     void addMovingLine(Vector startPos1, Vector speed1, Vector acc1, Vector startPos2, Vector speed2, Vector acc2, float startTime, float endTime, float width, int prio);
     void addFriendlyRobotTrajectoryObstacle(std::vector<TrajectoryPoint> *obstacle, int prio, float radius);
-
-    void collectMovingObstacles();
+    void addOpponentRobotObstacle(Vector startPos, Vector speed, int prio);
 
     // obstacle checking for points and trajectories
-    template<typename container>
-    bool isInStaticObstacle(const container &obstacles, Vector point) const {
-        if (!pointInPlayfield(point, m_radius)) {
-            return true;
-        }
-        for (const auto obstacle : obstacles) {
-            if (obstacle->distance(point) < 0) {
-                return true;
-            }
-        }
-        return false;
-    }
+    bool isInStaticObstacle(Vector point) const;
+    bool isTrajectoryInObstacle(const Trajectory &profile, float timeOffset) const;
+    // return {min distance of trajectory to obstacles, min distances of first and last points to obstacles}
+    // distances are only accurate up to safetyMargin
+    std::pair<float, float> minObstacleDistance(const Trajectory &profile, float timeOffset, float safetyMargin) const;
+    float minObstacleDistancePoint(const TrajectoryPoint &point) const;
+    bool isInFriendlyStopPos(const Vector pos) const;
 
-    bool isInMovingObstacle(const std::vector<MovingObstacles::MovingObstacle *> &obstacles, Vector point, float time) const;
-    bool isTrajectoryInObstacle(const SpeedProfile &profile, float timeOffset, Vector startPos) const;
-    // return {min distance of trajectory to obstacles, min distance of last point to obstacles}
-    std::pair<ZonedIntersection, ZonedIntersection> minObstacleDistance(const SpeedProfile &profile, float timeOffset, Vector startPos, float safetyMargin) const;
-    float minObstacleDistancePoint(Vector pos, float time, bool checkStatic, bool checkDynamic) const;
+    std::vector<Obstacles::Obstacle*> intersectingObstacles(const Trajectory &trajectory) const;
 
     // collectobstacles must have been called before calling this function
     void serialize(pathfinding::WorldState *state) const;
@@ -93,21 +83,23 @@ public:
     WorldInformation& operator=(const WorldInformation &world) = default;
 
 private:
-    mutable QVector<const StaticObstacles::Obstacle*> m_obstacles;
+    std::vector<Obstacles::Obstacle*> m_obstacles;
+    QVector<const Obstacles::StaticObstacle*> m_staticObstacles;
+    std::vector<Obstacles::Obstacle*> m_movingObstacles;
 
-    std::vector<StaticObstacles::Circle> m_circleObstacles;
-    std::vector<StaticObstacles::Rect> m_rectObstacles;
-    std::vector<StaticObstacles::Triangle> m_triangleObstacles;
-    std::vector<StaticObstacles::Line> m_lineObstacles;
+    std::vector<Obstacles::Circle> m_circleObstacles;
+    std::vector<Obstacles::Rect> m_rectObstacles;
+    std::vector<Obstacles::Triangle> m_triangleObstacles;
+    std::vector<Obstacles::Line> m_lineObstacles;
 
-    std::vector<MovingObstacles::MovingCircle> m_movingCircles;
-    std::vector<MovingObstacles::MovingLine> m_movingLines;
-    std::vector<MovingObstacles::FriendlyRobotObstacle> m_friendlyRobotObstacles;
-    std::vector<MovingObstacles::MovingObstacle*> m_movingObstacles;
+    std::vector<Obstacles::MovingCircle> m_movingCircles;
+    std::vector<Obstacles::MovingLine> m_movingLines;
+    std::vector<Obstacles::FriendlyRobotObstacle> m_friendlyRobotObstacles;
+    std::vector<Obstacles::OpponentRobotObstacle> m_opponentRobotObstacles;
 
     int m_outOfFieldPriority = 1;
 
-    StaticObstacles::Rect m_boundary;
+    Obstacles::Rect m_boundary;
     float m_radius = -1.0f;
     int m_robotId = 0;
 

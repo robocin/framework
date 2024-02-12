@@ -26,7 +26,7 @@
 #include <sys/time.h>
 #include <QDebug>
 
-using namespace StaticObstacles;
+using namespace Obstacles;
 
 /*!
  * \class Path
@@ -46,7 +46,7 @@ Path::Path(uint32_t rng_seed) :
 
 Path::~Path()
 {
-    reset();
+    Path::reset();
 }
 
 void Path::reset()
@@ -70,7 +70,7 @@ void Path::clearObstaclesCustom()
     m_seedTargets.clear();
 }
 
-bool Path::testSpline(const robot::Spline &spline, float radius) const
+bool Path::testSpline(const robot::Spline &spline)
 {
     // check if any parts of the given spline collides with an obstacle
     const float start = spline.t_start();
@@ -98,7 +98,7 @@ bool Path::testSpline(const robot::Spline &spline, float radius) const
             continue;
         }
 
-        if (!test(LineSegment(points[i-1], points[i]), radius)) {
+        if (!test(LineSegment(points[i-1], points[i]))) {
             return false;
         }
     }
@@ -115,11 +115,10 @@ Vector Path::evalSpline(const robot::Spline &spline, float t) const
 }
 
 //! @brief calculate how far we are standing in the (multiple) obstacles
-float Path::calculateObstacleCoverage(const Vector &v, const QVector<const Obstacle*> &obstacles, float robotRadius) const {
+float Path::calculateObstacleCoverage(const Vector &v, const QVector<const StaticObstacle*> &obstacles, float robotRadius) const {
     float d_sum = 0;
-    for (QVector<const Obstacle*>::const_iterator it = obstacles.constBegin();
-                it != obstacles.constEnd(); ++it) {
-        float d = (*it)->distance(v) - robotRadius;
+    for (auto it = obstacles.constBegin(); it != obstacles.constEnd(); ++it) {
+        const float d = (*it)->distance(v);
         if (d < 0) {
             d_sum += std::min(2*robotRadius, -d);
         }
@@ -127,7 +126,7 @@ float Path::calculateObstacleCoverage(const Vector &v, const QVector<const Obsta
     return d_sum;
 }
 
-bool Path::checkMovementRelativeToObstacles(const LineSegment &segment, const QVector<const Obstacle*> &obstacles, float radius) const {
+bool Path::checkMovementRelativeToObstacles(const LineSegment &segment, const QVector<const StaticObstacle*> &obstacles, float radius) const {
     Vector p = segment.start();
     Vector step = segment.end() - segment.start();
     const float l = step.length();
@@ -143,16 +142,16 @@ bool Path::checkMovementRelativeToObstacles(const LineSegment &segment, const QV
     }
 
     // split obstacle lists, the amount of start obstacles is decreasing for each tree
-    QVector<const Obstacle *> startObstacles;
-    QVector<const Obstacle *> otherObstacles;
+    QVector<const StaticObstacle *> startObstacles;
+    QVector<const StaticObstacle *> otherObstacles;
     int maxObstaclePrio = -1;
 
     {
-    QVarLengthArray<const Obstacle *, 100> tmpObstacles;
+    QVarLengthArray<const StaticObstacle *, 100> tmpObstacles;
     tmpObstacles.reserve(obstacles.size() - 1);
     // allow moving from an obstacle with high prio into one with lower prio
-    foreach (const Obstacle *o, obstacles) {
-        if (o->distance(p) < radius) {
+    foreach (const StaticObstacle *o, obstacles) {
+        if (o->distance(p) < 0) {
             if (o->prio > maxObstaclePrio) {
                 startObstacles.clear();
                 maxObstaclePrio = o->prio;
@@ -163,7 +162,7 @@ bool Path::checkMovementRelativeToObstacles(const LineSegment &segment, const QV
         }
     }
     otherObstacles.reserve(tmpObstacles.size());
-    for (const Obstacle *o: tmpObstacles) {
+    for (const StaticObstacle *o: tmpObstacles) {
         if (o->prio >= maxObstaclePrio) {
             otherObstacles.append(o);
         }
@@ -206,7 +205,7 @@ bool Path::checkMovementRelativeToObstacles(const LineSegment &segment, const QV
             if (d_sum > last_d_sum) {
                 return false;
             } else if (d_sum == 0.f && i < numSteps) {
-                if (!test(LineSegment(p, segment.end()), radius, startObstacles)) {
+                if (!test(LineSegment(p, segment.end()), startObstacles)) {
                     return false;
                 }
                 break;
@@ -217,7 +216,7 @@ bool Path::checkMovementRelativeToObstacles(const LineSegment &segment, const QV
         }
     }
     // new obstacles musn't be entered
-    return test(segment, radius, otherObstacles);
+    return test(segment, otherObstacles);
 }
 
 void Path::setProbabilities(float p_dest, float p_wp)
@@ -245,8 +244,8 @@ Path::List Path::get(float start_x, float start_y, float end_x, float end_y)
     m_sampleRect.bottomLeft = Vector(middle.x - x_half, middle.y - y_half);
     m_sampleRect.topRight = Vector(middle.x + x_half, middle.y + y_half);
 
-    bool startingInObstacle = !m_world.pointInPlayfield(start, radius) || !test(start, radius, m_world.obstacles());
-    bool endingInObstacle = !m_world.pointInPlayfield(end, radius) || !test(end, radius, m_world.obstacles());
+    bool startingInObstacle = !m_world.pointInPlayfield(start, radius) || !test(start, radius, m_world.staticObstacles());
+    bool endingInObstacle = !m_world.pointInPlayfield(end, radius) || !test(end, radius, m_world.staticObstacles());
 
     // setup tree rooted at the start
     delete m_treeStart;
@@ -263,7 +262,7 @@ Path::List Path::get(float start_x, float start_y, float end_x, float end_y)
         if (start == end) {
             pathCompleted = true;
         // otherwise we have to test if the direct way is free
-        } else if (test(LineSegment(start, end), radius)) {
+        } else if (test(LineSegment(start, end))) {
             pathCompleted = true;
             const KdTree::Node *nearestNode = m_treeStart->nearest(start);
             // raster path for usage as waypoint cache
@@ -362,9 +361,9 @@ Path::List Path::get(float start_x, float start_y, float end_x, float end_y)
         if (nearestNode != nullptr) {
             const Vector lineStart = points.last();
             Vector bestPos = findValidPoint(
-                        LineSegment(lineStart, m_treeEnd->position(nearestNode)), radius);
+                        LineSegment(lineStart, m_treeEnd->position(nearestNode)));
             if (lineStart != bestPos && m_world.pointInPlayfield(bestPos, radius)
-                    && test(LineSegment(lineStart, bestPos), radius)) {
+                    && test(LineSegment(lineStart, bestPos))) {
                 points.append(bestPos);
             }
         }
@@ -391,7 +390,7 @@ Path::List Path::get(float start_x, float start_y, float end_x, float end_y)
     // cut corners serveral times
     for (int i = 0; i < 3; ++i) {
         simplify(points, radius);
-        cutCorners(points, radius);
+        cutCorners(points);
     }
     // final cleanup
     simplify(points, radius);
@@ -425,7 +424,7 @@ void Path::simplify(QVector<Vector> &points, float radius)
     // every point before this index is inside the start obstacles
     int split = points.size();
     for (int i = 0; i < points.size(); ++i) {
-        if (m_world.pointInPlayfield(points[i], m_world.radius()) && test(points[i], radius, m_world.obstacles())) {
+        if (m_world.pointInPlayfield(points[i], m_world.radius()) && test(points[i], radius, m_world.staticObstacles())) {
             split = i;
             break;
         }
@@ -444,8 +443,8 @@ void Path::simplify(QVector<Vector> &points, float radius)
             // if start point is in obstacle check that the robot leaves the obstacles
             // otherwise use the default check
             LineSegment seg(points[start_index], points[end_index]);
-            if ((start_index < split && checkMovementRelativeToObstacles(seg, m_world.obstacles(), radius))
-                    || (start_index >= split && test(seg, radius))) {
+            if ((start_index < split && checkMovementRelativeToObstacles(seg, m_world.staticObstacles(), radius))
+                    || (start_index >= split && test(seg))) {
                 split -= std::min(std::max(0, split - start_index - 1), end_index - start_index - 1);
                 for (int i = 0; i < end_index - start_index - 1; i++) {
                     points.removeAt(start_index + 1);
@@ -522,9 +521,9 @@ const KdTree::Node * Path::extend(KdTree *tree, const KdTree::Node *fromNode, co
         // The new point is only valid if its farther away from the obstacles than right now
         // checking for outsidePlayfieldCoverage is not neccessary as target is always inside the playfield
         // and thus extended can't leave it
-        success = checkMovementRelativeToObstacles(LineSegment(from, extended), m_world.obstacles(), radius);
+        success = checkMovementRelativeToObstacles(LineSegment(from, extended), m_world.staticObstacles(), radius);
     } else { // otherwise test the new path for obstacles
-        success = m_world.pointInPlayfield(extended, m_world.radius()) && test(LineSegment(from, extended), radius);
+        success = m_world.pointInPlayfield(extended, m_world.radius()) && test(LineSegment(from, extended));
     }
 
     // No valid path
@@ -536,19 +535,19 @@ const KdTree::Node * Path::extend(KdTree *tree, const KdTree::Node *fromNode, co
     // once every obstacle was left, reentering one is impossible
     // thus only test obstacleCoverage if we're currently in an obstacle
     if (inObstacle) {
-        newInObstacle = !m_world.pointInPlayfield(extended, m_world.radius()) || !test(extended, radius, m_world.obstacles());
+        newInObstacle = !m_world.pointInPlayfield(extended, m_world.radius()) || !test(extended, radius, m_world.staticObstacles());
     }
     // Extend tree
     return tree->insert(extended, newInObstacle, fromNode);
 }
 
-bool Path::test(const Vector &v, float radius, const QVector<const Obstacle*> &obstacles) const {
+bool Path::test(const Vector &v, float radius, const QVector<const StaticObstacle*> &obstacles) const {
     if (!m_world.pointInPlayfield(v, radius)) {
         return false;
     }
-    for(QVector<const Obstacle*>::const_iterator it = obstacles.constBegin();
+    for(QVector<const StaticObstacle*>::const_iterator it = obstacles.constBegin();
                 it != obstacles.constEnd(); ++it) {
-        if ((*it)->distance(v) < radius) {
+        if ((*it)->distance(v) < 0) {
             return false;
         }
     }
@@ -556,11 +555,11 @@ bool Path::test(const Vector &v, float radius, const QVector<const Obstacle*> &o
     return true;
 }
 
-bool Path::test(const LineSegment &segment, float radius, const QVector<const Obstacle*> &obstacles) const
+bool Path::test(const LineSegment &segment, const QVector<const StaticObstacle*> &obstacles) const
 {
-    for (QVector<const Obstacle*>::const_iterator it = obstacles.constBegin();
+    for (QVector<const StaticObstacle*>::const_iterator it = obstacles.constBegin();
                 it != obstacles.constEnd(); ++it) {
-        if ((*it)->distance(segment) < radius) {
+        if ((*it)->distance(segment) < 0) {
             return false;
         }
     }
@@ -568,12 +567,12 @@ bool Path::test(const LineSegment &segment, float radius, const QVector<const Ob
     return true;
 }
 
-bool Path::test(const LineSegment &segment, float radius) const
+bool Path::test(const LineSegment &segment) const
 {
-    return test(segment, radius, m_world.obstacles());
+    return test(segment, m_world.staticObstacles());
 }
 
-Vector Path::findValidPoint(const LineSegment &segment, float radius) const
+Vector Path::findValidPoint(const LineSegment &segment) const
 {
     // find the point using a binary search
     const Vector &lineStart = segment.start();
@@ -583,7 +582,7 @@ Vector Path::findValidPoint(const LineSegment &segment, float radius) const
 
     while (dist > 0.001f) {
         Vector mid = (end + start) / 2;
-        if (m_world.pointInPlayfield(mid, m_world.radius()) && test(LineSegment(lineStart, mid), radius)) {
+        if (m_world.pointInPlayfield(mid, m_world.radius()) && test(LineSegment(lineStart, mid))) {
             start = mid;
         } else {
             end = mid;
@@ -594,7 +593,7 @@ Vector Path::findValidPoint(const LineSegment &segment, float radius) const
     return (start + end)/2;
 }
 
-void Path::cutCorners(QVector<Vector> &points, float radius)
+void Path::cutCorners(QVector<Vector> &points)
 {
     for (int i = 1; i < points.size() - 1; i++) {
         const Vector left = points[i - 1];
@@ -620,7 +619,7 @@ void Path::cutCorners(QVector<Vector> &points, float radius)
             step /= 2;
             // don't check whether the new points are inside the playfield
             // only obstacles are important here, thus paths into the playfield can be smoothed
-            if (test(line, radius)) {
+            if (test(line)) {
                 lastGood = dist;
                 dist += step;
             } else {

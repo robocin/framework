@@ -67,6 +67,8 @@ public:
     void handleCommand(const amun::CommandTracking &command, qint64 time);
     void reset();
     void finishProcessing(); // has to be called after all calls to worldState for one frame
+    void setGeometryUpdated() { m_geometryUpdated = true; }
+    void setBallModel(const world::BallModel &ballModel) { m_ballModel.CopyFrom(ballModel); }
 
 private:
     void updateCamera(const SSL_GeometryCameraCalibration &c, QString sender);
@@ -75,10 +77,13 @@ private:
     void invalidateBall(qint64 currentTime);
     void invalidateRobots(RobotMap &map, qint64 currentTime);
 
-    QList<RobotFilter *> getBestRobots(qint64 currentTime);
-    void trackBall(const SSL_DetectionBall &ball, qint64 receiveTime, quint32 cameraId, const QList<RobotFilter *> &bestRobots, qint64 visionProcessingDelay);
+    QList<RobotFilter*> getBestRobots(qint64 currentTime, int desiredCamera);
+    void trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiveTime, qint64 visionProcessingDelay);
     void trackRobot(RobotMap& robotMap, const SSL_DetectionRobot &robot, qint64 receiveTime, qint32 cameraId, qint64 visionProcessingDelay,
                     bool teamIsYellow);
+
+    BallTracker* bestBallFilter();
+    void prioritizeBallFilters();
 
 private:
     typedef QPair<robot::RadioCommand, qint64> RadioCommand;
@@ -94,18 +99,21 @@ private:
     bool m_geometryUpdated;
     bool m_hasVisionData;
     bool m_virtualFieldEnabled;
+    world::BallModel m_ballModel;
 
     QMap<qint32, qint64> m_lastUpdateTime; // indexed by camera id
     QList<Packet> m_visionPackets;
+
+    /** The last time a slow vision frame was received. Timestamp on a local clock */
+    qint64 m_lastSlowVisionFrame;
+    /** The number of slow vision frames received in the recent past */
+    int m_numSlowVisionFrames;
 
     QList<BallTracker*> m_ballFilter;
     BallTracker* m_currentBallFilter;
 
     RobotMap m_robotFilterYellow;
     RobotMap m_robotFilterBlue;
-
-    BallTracker* bestBallFilter();
-    void prioritizeBallFilters();
 
     bool m_aoiEnabled;
     float m_aoi_x1;
@@ -116,6 +124,9 @@ private:
     QList<QString> m_errorMessages;
     QList<std::pair<SSL_WrapperPacket, qint64>> m_detectionWrappers;
     std::unique_ptr<FieldTransform> m_fieldTransform;
+
+    // if possible, select robots from this camera
+    int m_desiredRobotCamera = -1;
 
     // differences between tracker and speedtracker
     const bool m_robotsOnly;

@@ -24,7 +24,7 @@
 void PathDebug::debug(const QString &key, float value)
 {
     amun::DebugValue debugValue;
-    QByteArray array = key.toLocal8Bit();
+    const QByteArray array = key.toLocal8Bit();
     const char* k = array.data();
     debugValue.set_key(k);
     debugValue.set_float_value(value);
@@ -34,11 +34,16 @@ void PathDebug::debug(const QString &key, float value)
 void PathDebug::debug(const QString &key, const QString &value)
 {
     amun::DebugValue debugValue;
-    QByteArray array = key.toLocal8Bit();
+    const QByteArray array = key.toLocal8Bit();
     const char* k = array.data();
     debugValue.set_key(k);
     debugValue.set_string_value(value.toStdString());
     emit gotDebug(debugValue);
+}
+
+void PathDebug::log(const QString &text)
+{
+    emit gotLog(text);
 }
 
 void PathDebug::setColor(amun::Pen *pen, PathDebugColor color)
@@ -67,6 +72,9 @@ void PathDebug::setColor(amun::Pen *pen, PathDebugColor color)
     case PathDebugColor::TURQUOISE:
         pen->mutable_color()->set_green(255);
         pen->mutable_color()->set_blue(255);
+    case PathDebugColor::ORANGE:
+        pen->mutable_color()->set_red(255);
+        pen->mutable_color()->set_green(127);
         break;
     }
 }
@@ -115,16 +123,18 @@ void PathDebug::debugLine(const QString &name, Vector start, Vector end, PathDeb
     emit gotVisualization(vis);
 }
 
-void PathDebug::debugTrajectory(const QString &name, const SpeedProfile &trajectory, Vector offset, PathDebugColor color)
+void PathDebug::debugTrajectory(const QString &name, const Trajectory &trajectory, PathDebugColor color)
 {
-    if (!trajectory.isValid()) {
-        return;
-    }
-    const int VIS_POINTS = 35;
-    float timeInterval = trajectory.time() / float(VIS_POINTS-1);
+    const int VIS_POINTS = 150;
+    const float timeInterval = trajectory.time() / float(VIS_POINTS-1);
 
-    std::vector<Vector> points = trajectory.trajectoryPositions(offset, VIS_POINTS, timeInterval);
-    debugPath(name, points, color);
+    const auto points = trajectory.trajectoryPositions(VIS_POINTS, timeInterval, 0);
+    std::vector<Vector> positions;
+    positions.reserve(points.size());
+    for (const auto &point : points) {
+        positions.push_back(point.state.pos);
+    }
+    debugPath(name, positions, color);
 }
 
 void PathDebug::debugBoundingBox(const QString &name, const BoundingBox &boundingBox, PathDebugColor color)

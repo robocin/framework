@@ -22,7 +22,8 @@
 #define AMUN_H
 
 #include "strategy/script/compilerregistry.h"
-#include "gamecontroller/gamecontrollerconnection.h"
+#include "strategy/script/strategytype.h"
+#include "gamecontroller/strategygamecontrollermediator.h"
 #include "protobuf/command.h"
 #include "protobuf/status.h"
 #include <QObject>
@@ -32,6 +33,7 @@
 class DebugHelper;
 class NetworkInterfaceWatcher;
 class Processor;
+class TrackingReplay;
 class Receiver;
 class Strategy;
 class Timer;
@@ -44,6 +46,7 @@ class ProtobufFileSaver;
 class OptionsManager;
 class Seshat;
 class CommandConverter;
+class GitInfoRecorder;
 
 namespace camun {
     namespace simulator {
@@ -67,7 +70,6 @@ signals:
     void gotCommand(const Command &command);
     void updateVisionPort(quint16 port);
     void updateRefereePort(quint16 port);
-    void gotRefereeHost(QString hostName);
     void useInternalGameController(bool useInternal);
     void gotCommandForGC(const amun::CommandReferee &command);
 
@@ -81,7 +83,6 @@ public slots:
 private slots:
     void handleStatus(const Status &status);
     void handleReplayStatus(const Status &status);
-    void handleRefereePacket(QByteArray, qint64, QString host);
     void handleStatusForReplay(const Status &status);
     void handleCommandLocally(const Command& command);
 
@@ -101,9 +102,9 @@ private:
     QThread *m_simulatorThread;
     QThread *m_strategyThread[5];
     QThread *m_debugHelperThread;
+    QThread *m_gitRecorderThread;
 
     Processor *m_processor;
-    std::unique_ptr<Processor> m_replayProcessor;
     Transceiver *m_transceiver;
     NetworkTransceiver *m_networkTransceiver;
     camun::simulator::Simulator *m_simulator;
@@ -112,7 +113,7 @@ private:
     Receiver *m_mixedTeam;
     Strategy *m_strategy[3];
     DebugHelper *m_debugHelper[3];
-    std::shared_ptr<GameControllerConnection> m_gameControllerConnection[3];
+    std::shared_ptr<StrategyGameControllerMediator> m_gameControllerConnection[3];
     Strategy *m_replayStrategy[2];
     OptionsManager *m_optionsManager = nullptr;
     BlockingStrategyReplay *m_strategyBlocker[2];
@@ -126,8 +127,8 @@ private:
     const bool m_simulatorOnly;
     bool m_useInternalReferee;
     bool m_useAutoref;
-    bool m_trackingReplay = false;
-    Status m_lastTrackingReplayGameState;
+    bool m_enableTrackingReplay = false;
+    std::unique_ptr<TrackingReplay> m_trackingReplay;
 
     QSet<amun::PauseSimulatorReason> m_activePauseReasons;
     float m_previousSpeed;
@@ -136,10 +137,11 @@ private:
 
     CompilerRegistry m_compilerRegistry;
 
-    ProtobufFileSaver *m_pathInputSaver;
+    std::unique_ptr<ProtobufFileSaver> m_pathInputSaver[2];
     Seshat *m_seshat;
 
     CommandConverter *m_commandConverter;
+	GitInfoRecorder *m_gitInfoRecorder;
 };
 
 #endif // AMUN_H

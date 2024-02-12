@@ -8,8 +8,6 @@
  * This API may only be used by coded that provides a mapping between Amun and Strategy
  */
 
-/* tslint:disable:prefer-method-signature */
-
 /**************************************************************************
 *   Copyright 2015 Alexander Danzer, Michael Eischer, Philipp Nordhus     *
 *   Robotics Erlangen e.V.                                                *
@@ -62,9 +60,11 @@ interface AmunPublic {
 	/** Send arbitrary commands. Only works in debug mode */
 	sendCommand(command: pb.amun.Command): void;
 
+	/* eslint-disable @typescript-eslint/naming-convention */
 	// ra version/feature tags
 	readonly SUPPORTS_OPTION_DEFAULT: boolean | undefined;
 	readonly SUPPORTS_EFFICIENT_PATHVIS: boolean | undefined;
+	/* eslint-enable @typescript-eslint/naming-convention */
 }
 
 interface Amun extends AmunPublic {
@@ -175,8 +175,9 @@ export function _hideFunctions() {
 	let supportsEfficientPath = amun.SUPPORTS_EFFICIENT_PATHVIS;
 
 	const makeDisabledFunction = function(name: string) {
+		// eslint-disable-next-line @typescript-eslint/naming-convention
 		function DISABLED_FUNCTION(..._: any[]): any {
-			throw new Error("Usage of disabled amun function " + name);
+			throw new Error(`Usage of disabled amun function ${name}`);
 		}
 		return DISABLED_FUNCTION;
 	};

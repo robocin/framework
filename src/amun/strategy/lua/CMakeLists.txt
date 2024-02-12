@@ -18,7 +18,7 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-add_library(lua
+add_library(lua STATIC
     include/strategy/lua/lua.h
 
     lua.cpp
@@ -28,6 +28,8 @@ add_library(lua
     lua_path.h
     lua_protobuf.cpp
     lua_protobuf.h
+    lua_eigen.cpp
+    lua_eigen.h
 )
 
 target_include_directories(lua
@@ -42,6 +44,7 @@ target_link_libraries(lua
 
     PRIVATE amun::path
     PUBLIC amun::strategy::script
+    PUBLIC lib::eigen
 )
 
 add_library(amun::strategy::lua ALIAS lua)

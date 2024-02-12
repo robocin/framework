@@ -23,6 +23,7 @@
 
 #include "amun/amunclient.h"
 #include "aboutus.h"
+#include "gitinfodialog.h"
 #include "loggingsuite.h"
 #include <QMainWindow>
 #include <QSet>
@@ -98,6 +99,8 @@ private slots:
     void searchUid(QString uid);
     void requestUidInsertWindow();
     void changeDivision(world::Geometry::Division division);
+    void updatePalette(QPalette palette);
+    void pauseAll();
 
 private:
     void toggleHorusModeWidgets(bool enable);
@@ -116,6 +119,7 @@ private:
     InternalReferee *m_internalReferee;
     ConfigDialog *m_configDialog;
     AboutUs *m_aboutUs;
+	GitInfoDialog *m_gitInfo;
     QLabel *m_transceiverStatus;
     bool m_transceiverActive;
     qint32 m_lastStageTime;

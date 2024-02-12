@@ -51,7 +51,8 @@ public:
         CutDebugTree = 0x20,
         CutLogOutput = 0x40,
         CutVisualizations = 0x80,
-        CutPlot = 0x100
+        CutPlot = 0x100,
+        CutGit = 0x200
     };
     Q_DECLARE_FLAGS(Options, Option)
 
@@ -65,7 +66,7 @@ public:
 
 signals:
     void progressUpdate(const QString& progress);
-    void finished();
+    void finishedProcessing();
     void error(const QString &message);
     void outputSelected(LogFileWriter* writer);
 

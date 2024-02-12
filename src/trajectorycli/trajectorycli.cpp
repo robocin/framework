@@ -42,16 +42,16 @@ static TrajectoryInput deserializeTrajectoryInput(const pathfinding::TrajectoryI
 {
     TrajectoryInput result;
     if (input.has_v0()) {
-        result.v0 = deserializeVector(input.v0());
+        result.start.speed = deserializeVector(input.v0());
     }
     if (input.has_v1()) {
-        result.v1 = deserializeVector(input.v1());
+        result.target.speed = deserializeVector(input.v1());
     }
     if (input.has_s0()) {
-        result.s0 = deserializeVector(input.s0());
+        result.start.pos = deserializeVector(input.s0());
     }
     if (input.has_s1()) {
-        result.s1 = deserializeVector(input.s1());
+        result.target.pos = deserializeVector(input.s1());
     }
     if (input.has_max_speed()) {
         result.maxSpeed = input.max_speed();
@@ -60,13 +60,11 @@ static TrajectoryInput deserializeTrajectoryInput(const pathfinding::TrajectoryI
         result.acceleration = input.acceleration();
     }
 
-    result.distance = result.s1 - result.s0;
-    result.exponentialSlowDown = result.v1 == Vector(0, 0);
+    result.exponentialSlowDown = result.target.speed == Vector(0, 0);
     result.maxSpeedSquared = result.maxSpeed * result.maxSpeed;
 
     return result;
 }
-
 
 int main(int argc, char* argv[])
 {
@@ -88,9 +86,27 @@ int main(int argc, char* argv[])
     parser.addOption(endInObstacle);
     QCommandLineOption alphaTime("a", "Optimize the alpha time trajectory search parameters");
     parser.addOption(alphaTime);
+    QCommandLineOption countCollisions("c", "Count collisions in random scenarios");
+    parser.addOption(countCollisions);
+    QCommandLineOption computeTiming("t", "Compute trajectory pathfinding timing");
+    parser.addOption(computeTiming);
 
     // parse command line
     parser.process(app);
+
+    if (parser.isSet(countCollisions)) {
+        const bool USE_OLD_OBSTACLE = false;
+        const bool SAVE_LOGS = false;
+
+        const int SCENARIOS = 500;
+        const int randomCollisions = testCollisions(CollisionTestType::RANDOM, SCENARIOS, USE_OLD_OBSTACLE, SAVE_LOGS);
+        std::cout <<"Random: "<<randomCollisions<<"/"<<SCENARIOS<<std::endl;
+        const int blockCollisions = testCollisions(CollisionTestType::BLOCKED_LINE, SCENARIOS, USE_OLD_OBSTACLE, SAVE_LOGS);
+        std::cout <<"Block line: "<<blockCollisions<<"/"<<SCENARIOS<<std::endl;
+        const int adversaryCollisions = testCollisions(CollisionTestType::ADVERSARIAL, SCENARIOS, USE_OLD_OBSTACLE, SAVE_LOGS);
+        std::cout <<"Adversarial: "<<adversaryCollisions<<"/"<<SCENARIOS<<std::endl;
+        return 0;
+    }
 
     int argCount = parser.positionalArguments().size();
     if (argCount != 1) {
@@ -98,13 +114,15 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    if (!parser.isSet(standardSampler) && !parser.isSet(endInObstacle) && !parser.isSet(alphaTime)) {
+    if (!parser.isSet(standardSampler) && !parser.isSet(endInObstacle) && !parser.isSet(alphaTime)
+            && !parser.isSet(countCollisions) && !parser.isSet(computeTiming)) {
         qDebug() <<"At lest one optimizer must be run!";
         parser.showHelp(1);
         return 0;
     }
 
-    QString path = parser.positionalArguments().first();
+    const QStringList arguments = parser.positionalArguments();
+    QString path = arguments.first();
 
     std::vector<Situation> situations;
 
@@ -168,6 +186,14 @@ int main(int argc, char* argv[])
             exit(1);
         }
         optimizeAlphaTimeTrajectoryParameters(situations);
+    }
+
+    if (parser.isSet(computeTiming)) {
+        if (sourceSoFar != pathfinding::AllSamplers) {
+            std::cerr <<"Error: trying to use pathfinding inputs not collected for the whole trajectorypath!"<<std::endl;
+            exit(1);
+        }
+        checkTiming(situations);
     }
 
     return 0;

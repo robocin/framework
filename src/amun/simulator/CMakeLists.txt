@@ -18,7 +18,7 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-add_library(simulator
+add_library(simulator STATIC
     include/simulator/simulator.h
     include/simulator/fastsimulator.h
 
@@ -41,6 +41,7 @@ target_link_libraries(simulator
     PRIVATE lib::bullet
     PUBLIC Qt5::Core
     PRIVATE Qt5::Gui
+    PRIVATE lib::eigen
 )
 target_include_directories(simulator
     INTERFACE include

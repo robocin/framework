@@ -23,8 +23,8 @@
 
 // TODO maybe exclude z axis from kalman filter
 
-GroundFilter::GroundFilter(const VisionFrame& frame, CameraInfo* cameraInfo, const FieldTransform &transform) :
-    AbstractBallFilter(frame, cameraInfo, transform)
+GroundFilter::GroundFilter(const VisionFrame& frame, CameraInfo* cameraInfo, const FieldTransform &transform, const world::BallModel &ballModel) :
+    AbstractBallFilter(frame, cameraInfo, transform, ballModel)
 {
     reset(frame);
 }
@@ -42,7 +42,18 @@ void GroundFilter::reset(const VisionFrame& frame)
     x(1) = frame.y;
     m_kalman.reset(new Kalman(x));
     m_kalman->H = Kalman::MatrixM::Identity();
+
+    // a good calibration should also work with 0.002 0.002 or a bit less
+    // if the ball isn't moving then 0.001 0.001 should be enough
+    setObservationStdDev(0.003f);
+
     m_lastUpdate = frame.time;
+}
+
+void GroundFilter::setSpeed(Eigen::Vector2f speed)
+{
+    m_kalman->modifyState(3, speed.x());
+    m_kalman->modifyState(4, speed.y());
 }
 
 void GroundFilter::predict(qint64 time)
@@ -61,7 +72,7 @@ void GroundFilter::predict(qint64 time)
     m_kalman->B = m_kalman->F;
 
     // simple ball rolling friction estimation
-    const float deceleration = 0.4f * timeDiff;
+    const float deceleration = m_ballModel.slow_deceleration() * timeDiff;
     const Kalman::Vector d = m_kalman->baseState();
     const double v = std::sqrt(d(3) * d(3) + d(4) * d(4));
     const double phi = std::atan2(d(4), d(3));
@@ -139,6 +150,15 @@ void GroundFilter::predict(qint64 time)
     m_kalman->predict(false);
 }
 
+void GroundFilter::setObservationStdDev(float deviation)
+{
+    // measurement covariance matrix
+    Kalman::MatrixMM R = Kalman::MatrixMM::Zero();
+    R(0, 0) = deviation;
+    R(1, 1) = deviation;
+    m_kalman->R = R.cwiseProduct(R); // squares all entries
+}
+
 void GroundFilter::processVisionFrame(const VisionFrame& frame)
 {
     predict(frame.time);
@@ -147,44 +167,15 @@ void GroundFilter::processVisionFrame(const VisionFrame& frame)
     m_kalman->z(0) = frame.x;
     m_kalman->z(1) = frame.y;
 
-    // measurement covariance matrix
-    Kalman::MatrixMM R = Kalman::MatrixMM::Zero();
-    // a good calibration should also work with 0.002 0.002 or a bit less
-    // if the ball isn't moving then 0.001 0.001 should be enough
-    R(0, 0) = 0.003;
-    R(1, 1) = 0.003;
-    m_kalman->R = R.cwiseProduct(R); // quadriert alle einträge
     m_kalman->update();
     m_lastUpdate = frame.time;
 }
 
-static float ACCEPT_DIST = 0.45; // FIXME mahalanobis
-bool GroundFilter::acceptDetection(const VisionFrame& frame)
-{
-    Eigen::Vector2f reportedPos(frame.x, frame.y);
-    return distanceTo(reportedPos) < ACCEPT_DIST;
-}
-
-std::size_t GroundFilter::chooseBall(const std::vector<VisionFrame> &frames)
-{
-    float minDistance = std::numeric_limits<float>::max();
-    std::size_t minIndex = 0;
-    for (std::size_t i = 0;i<frames.size();i++) {
-        float dist = distanceTo(Eigen::Vector2f(frames[i].x, frames[i].y));
-        if (dist < minDistance) {
-            minDistance = dist;
-            minIndex = i;
-        }
-    }
-    return minIndex;
-}
-
-float GroundFilter::distanceTo(Eigen::Vector2f objPos)
+float GroundFilter::distanceTo(Eigen::Vector2f objPos) const
 {
     Eigen::Vector2f estimatedPos(m_kalman->state()(0), m_kalman->state()(1));
     return (objPos - estimatedPos).norm();
 }
-
 
 
 //float BallTracker::mahalanobisDistance(const SSL_DetectionBall &ball, qint64 time)
@@ -196,7 +187,7 @@ float GroundFilter::distanceTo(Eigen::Vector2f objPos)
 //}
 
 
-void GroundFilter::writeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &)
+void GroundFilter::writeBallState(world::Ball *ball, qint64 time, const QVector<RobotInfo> &, qint64)
 {
     predict(time);
 

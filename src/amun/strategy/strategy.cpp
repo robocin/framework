@@ -71,6 +71,12 @@ void Strategy::initV8() {
     v8::V8::InitializeExternalStartupData(QCoreApplication::applicationFilePath().toUtf8().data());
     static_platform = v8::platform::NewDefaultPlatform();
     v8::V8::InitializePlatform(static_platform.get());
+    /* tsc_internal:InternalTypescriptCompiler and v8utility:embedToExternal
+     * require this to be set.
+     *
+     * In recent V8 versions, flags need to be set before initializing V8
+     */
+    v8::V8::SetFlagsFromString("--expose_gc", 12);
     v8::V8::Initialize();
 }
 #else
@@ -84,7 +90,7 @@ void Strategy::initV8() { }
  * \param type can be blue or yellow team or autoref
  */
 Strategy::Strategy(const Timer *timer, StrategyType type, DebugHelper *helper, CompilerRegistry* registry,
-                   std::shared_ptr<GameControllerConnection> &gameControllerConnection, bool internalAutoref,
+                   std::shared_ptr<StrategyGameControllerMediator> &gameControllerConnection, bool internalAutoref,
                    bool isLogplayer, ProtobufFileSaver *pathInputSaver) :
     m_p(new StrategyPrivate),
     m_timer(timer),
@@ -325,7 +331,8 @@ bool Strategy::updateTeam(const robot::Team &team, StrategyType teamType, bool i
     if (team.robot_size() > 0) {
         m_anyRobotSpec.CopyFrom(team.robot(0));
     }
-    if (team.robot_size() != 0 && (!m_scriptState.isRunningInLogplayer || isReplayTeam)
+    if ((!m_scriptState.isRunningInLogplayer || team.robot_size() != 0)
+            && (!m_scriptState.isRunningInLogplayer || isReplayTeam)
             && m_type == teamType
             && team.SerializeAsString() != m_team.SerializeAsString()) {
         m_team.CopyFrom(team);
@@ -366,6 +373,9 @@ world::State Strategy::assembleWorldState()
         if (m_type != StrategyType::BLUE && worldState.simple_tracking_blue_size() > 0) {
             worldState.clear_blue();
             worldState.mutable_blue()->CopyFrom(worldState.simple_tracking_blue());
+        }
+        if (m_type == StrategyType::AUTOREF && worldState.has_simple_tracking_ball()) {
+            worldState.mutable_ball()->CopyFrom(worldState.simple_tracking_ball());
         }
     }
     return worldState;
@@ -572,6 +582,7 @@ void Strategy::loadScript(const QString &filename, const QString &entryPoint, bo
             fail(QString("No strategy handler for file %1").arg(filename));
             return;
         }
+        connect(m_strategy, &AbstractStrategyScript::recordGitDiff, this, &Strategy::requestGitRecording);
     }
 
     if (m_scriptState.isDebugEnabled && m_scriptState.debugHelper) {
@@ -719,6 +730,8 @@ void Strategy::setStrategyStatus(Status &status, amun::StatusStrategy::STATE sta
             strategy->set_has_debugger(true);
         }
     }
+
+    m_currentState = state;
 }
 
 Status Strategy::takeStrategyDebugStatus()
@@ -759,4 +772,8 @@ amun::DebugSource Strategy::debugSource() const
         return amun::Autoref;
     }
     qFatal("Internal error");
+}
+
+void Strategy::requestGitRecording(const QString& dir, bool changed) {
+    emit recordGitDiff(dir, changed, static_cast<int>(m_type));
 }

@@ -37,18 +37,18 @@ bool MultiEscapeSampler::compute(const TrajectoryInput &input)
     // Therefore, this class first tests if it is possible to fully break and then escape the
     // obstacle in the best direction, eliminating the problem.
     TrajectoryInput zeroV0Input = input;
-    zeroV0Input.v0 = Vector(0, 0);
+    zeroV0Input.start.speed = Vector(0, 0);
     // TODO: in principle, this sampler can be simplified since the result is always a straight line
-    bool zeroValid = m_zeroV0Sampler.compute(zeroV0Input);
+    const bool zeroValid = m_zeroV0Sampler.compute(zeroV0Input);
     if (zeroValid) {
-        Vector initialAcc = m_zeroV0Sampler.getResult()[0].profile.initialAcceleration();
-        float accInV0 = initialAcc.dot(input.v0);
+        const Vector initialAcc = m_zeroV0Sampler.getResult()[0].initialAcceleration();
+        const float accInV0 = initialAcc.dot(input.start.speed);
         m_resultIsZeroV0 = accInV0 <= 0;
     } else {
         m_resultIsZeroV0 = false;
     }
     if (!m_resultIsZeroV0) {
-          bool valid = m_regularSampler.compute(input);
+          const bool valid = m_regularSampler.compute(input);
           return valid;
     } else {
         m_regularSampler.updateFrom(m_zeroV0Sampler);
@@ -71,7 +71,7 @@ void MultiEscapeSampler::resetMaxIntersectingObstaclePrio()
     m_regularSampler.resetMaxIntersectingObstaclePrio();
 }
 
-auto MultiEscapeSampler::getResult() const -> const std::vector<TrajectoryGenerationInfo>&
+const std::vector<Trajectory> &MultiEscapeSampler::getResult() const
 {
     if (m_resultIsZeroV0) {
         return m_zeroV0Sampler.getResult();

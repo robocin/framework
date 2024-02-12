@@ -25,7 +25,7 @@
 #include "referee.h"
 #include "core/timer.h"
 #include "core/configuration.h"
-#include "gamecontroller/sslgamecontroller.h"
+#include "gamecontroller/internalgamecontroller.h"
 #include "tracking/tracker.h"
 #include "config/config.h"
 #include <cmath>
@@ -121,14 +121,14 @@ const int Processor::FREQUENCY(100);
 Processor::Processor(const Timer *timer, bool isReplay) :
     m_timer(timer),
     m_tracker(new Tracker(false, false)),
-    m_strategyTracker(new Tracker(false, false)),
     m_speedTracker(new Tracker(true, true)),
-    m_simpleTracker(new Tracker(true, false)),
+    m_simpleTracker(new Tracker(false, false)),
     m_mixedTeamInfoSet(false),
     m_refereeInternalActive(isReplay),
     m_lastFlipped(false),
-    m_gameController(new SSLGameController(timer)),
-    m_transceiverEnabled(isReplay)
+    m_gameController(new InternalGameController(timer)),
+    m_transceiverEnabled(isReplay),
+    m_saveBallModel(!isReplay)
 {
     // keep two separate referee states
     m_referee = new Referee();
@@ -137,13 +137,18 @@ Processor::Processor(const Timer *timer, bool isReplay) :
     m_gameControllerThread = new QThread(this);
     m_gameControllerThread->setObjectName("game controller thread");
     m_gameController->moveToThread(m_gameControllerThread);
-    connect(m_gameControllerThread, &QThread::finished, m_gameController, &SSLGameController::deleteLater);
+    connect(m_gameControllerThread, &QThread::finished, m_gameController, &InternalGameController::deleteLater);
     m_gameControllerThread->start();
 
-    connect(m_gameController, &SSLGameController::sendStatus, this, &Processor::sendStatus);
-    connect(m_gameController, &SSLGameController::gotPacketForReferee, m_refereeInternal, &Referee::handlePacket);
-    connect(this, &Processor::sendStatus, m_gameController, &SSLGameController::handleStatus);
-    connect(this, &Processor::setFlipped, m_gameController, &SSLGameController::setFlip);
+    connect(m_gameController, &InternalGameController::sendStatus, this, &Processor::sendStatus);
+    connect(m_gameController, &InternalGameController::gotPacketForReferee, m_refereeInternal, &Referee::handlePacket);
+    connect(this, &Processor::sendStatus, m_gameController, &InternalGameController::handleStatus);
+    connect(this, &Processor::setFlipped, m_gameController, &InternalGameController::setFlip);
+
+    /* Connect only the m_referee (not m_refereeInternal) as host changes are
+     * only relevant for external game controllers.
+     */
+    connect(m_referee, &Referee::refereeHostChanged, this, &Processor::refereeHostChanged);
 
     // start processing
     m_trigger = new QTimer(this);
@@ -156,6 +161,9 @@ Processor::Processor(const Timer *timer, bool isReplay) :
     connect(timer, &Timer::scalingChanged, this, &Processor::setScaling);
 
     loadConfiguration("division-dimensions", &m_divisionDimensions, false);
+
+    loadConfiguration(ballModelConfigFile(m_simulatorEnabled), &m_ballModel, false);
+    m_ballModelUpdated = true;
 }
 
 /*!
@@ -173,12 +181,19 @@ Processor::~Processor()
     qDeleteAll(m_yellowTeam.robots);
 }
 
-Status Processor::assembleStatus(Tracker &tracker, qint64 time, bool resetRaw)
+Status Processor::assembleStatus(qint64 time, bool resetRaw)
 {
-    Status status = tracker.worldState(time, true);
+    if (m_ballModelUpdated) {
+        // TODO: handle geometry entirely in processor?
+        m_tracker->setGeometryUpdated();
+    }
+    Status status = m_tracker->worldState(time, resetRaw);
     Status simplePredictionStatus = m_simpleTracker->worldState(time, resetRaw);
     status->mutable_world_state()->mutable_simple_tracking_blue()->CopyFrom(simplePredictionStatus->world_state().blue());
     status->mutable_world_state()->mutable_simple_tracking_yellow()->CopyFrom(simplePredictionStatus->world_state().yellow());
+    if (simplePredictionStatus->world_state().has_ball()) {
+        status->mutable_world_state()->mutable_simple_tracking_ball()->CopyFrom(simplePredictionStatus->world_state().ball());
+    }
     if (!m_extraVision.empty()) {
         for(const QByteArray& data : m_extraVision) {
             status->mutable_world_state()->add_reality()->ParseFromArray(data.data(), data.size());
@@ -190,6 +205,9 @@ Status Processor::assembleStatus(Tracker &tracker, qint64 time, bool resetRaw)
 
     if (status->has_geometry()) {
         world::Geometry* geometry = status->mutable_geometry();
+
+        geometry->mutable_ball_model()->CopyFrom(m_ballModel);
+        m_ballModelUpdated = false;
 
         if (std::abs(m_divisionDimensions.field_height_b() - geometry->field_height()) <= m_divisionDimensions.field_height_b()*0.1 && std::abs(m_divisionDimensions.field_width_b() - geometry->field_width()) <= m_divisionDimensions.field_width_b()*0.1) {
             geometry->set_division(world::Geometry_Division_B);
@@ -215,6 +233,15 @@ world::WorldSource Processor::currentWorldSource() const
     }
 }
 
+QString Processor::ballModelConfigFile(bool isSimulator)
+{
+    if (isSimulator) {
+        return "field-properties/simulator";
+    } else{
+        return "field-properties/field";
+    }
+}
+
 void Processor::process(qint64 overwriteTime)
 {
     const qint64 tracker_start = Timer::systemTime();
@@ -225,10 +252,9 @@ void Processor::process(qint64 overwriteTime)
 
     // run tracking
     m_tracker->process(current_time);
-    m_strategyTracker->process(current_time);
     m_speedTracker->process(current_time);
     m_simpleTracker->process(current_time);
-    Status status = assembleStatus(*m_tracker, current_time, false);
+    Status status = assembleStatus(current_time, false);
     Status radioStatus = m_speedTracker->worldState(current_time, false);
 
     // add information, about whether the world state is from the simulator or not
@@ -241,7 +267,6 @@ void Processor::process(qint64 overwriteTime)
     if (activeReferee->getFlipped() != m_lastFlipped) {
         m_lastFlipped = activeReferee->getFlipped();
         m_tracker->setFlip(m_lastFlipped);
-        m_strategyTracker->setFlip(m_lastFlipped);
         m_speedTracker->setFlip(m_lastFlipped);
         m_simpleTracker->setFlip(m_lastFlipped);
         emit setFlipped(m_lastFlipped);
@@ -280,12 +305,11 @@ void Processor::process(qint64 overwriteTime)
     if (m_transceiverEnabled) {
         // the command is active starting from now
         m_tracker->queueRadioCommands(radio_commands_prio, current_time+1);
-        m_strategyTracker->queueRadioCommands(radio_commands_prio, current_time+1);
     }
 
     // prediction which accounts for the strategy runtime
     // depends on the just created radio command
-    Status strategyStatus = assembleStatus(*m_strategyTracker, current_time + tickDuration, true);
+    Status strategyStatus = assembleStatus(current_time + tickDuration, true);
     strategyStatus->mutable_world_state()->set_is_simulated(m_simulatorEnabled);
     strategyStatus->mutable_world_state()->set_world_source(currentWorldSource());
     strategyStatus->mutable_game_state()->CopyFrom(activeReferee->gameState());
@@ -308,7 +332,6 @@ void Processor::process(qint64 overwriteTime)
     }
 
     m_tracker->finishProcessing();
-    m_strategyTracker->finishProcessing();
 }
 
 const world::Robot* Processor::getWorldRobot(const RobotList &robots, uint id) {
@@ -402,9 +425,9 @@ void Processor::injectRawSpeedIfAvailable(robot::RadioCommand *radioCommand, con
     }
 }
 
-void Processor::handleRefereePacket(const QByteArray &data, qint64 /*time*/)
+void Processor::handleRefereePacket(const QByteArray &data, qint64 /*time*/, QString sender)
 {
-    m_referee->handlePacket(data);
+    m_referee->handlePacket(data, sender);
     // ensure that tournament mode works even if the simulator is stopped
     if (m_referee->isGameRunning() && m_simulatorEnabled && !m_trigger->isActive()) {
         Status status = Status(new amun::Status);
@@ -416,7 +439,6 @@ void Processor::handleRefereePacket(const QByteArray &data, qint64 /*time*/)
 void Processor::handleVisionPacket(const QByteArray &data, qint64 time, QString sender)
 {
     m_tracker->queuePacket(data, time, sender);
-    m_strategyTracker->queuePacket(data, time, sender);
     m_speedTracker->queuePacket(data, time, sender);
     m_simpleTracker->queuePacket(data, time, sender);
 }
@@ -426,7 +448,7 @@ void Processor::handleSimulatorExtraVision(const QByteArray &data)
     m_extraVision.append(data);
 }
 
-void Processor::handleMixedTeamInfo(const QByteArray &data, qint64 time)
+void Processor::handleMixedTeamInfo(const QByteArray &data, qint64)
 {
     m_mixedTeamInfo.Clear();
     m_mixedTeamInfoSet = true;
@@ -457,6 +479,7 @@ void Processor::setTeam(const robot::Team &t, Team &team)
 void Processor::handleCommand(const Command &command)
 {
     bool teamsChanged = false;
+    bool simulatorEnabledBefore = m_simulatorEnabled;
 
     if (command->has_set_team_blue()) {
         setTeam(command->set_team_blue(), m_blueTeam);
@@ -494,7 +517,6 @@ void Processor::handleCommand(const Command &command)
     if (command->has_tracking()) {
         const qint64 currentTime = m_timer->currentTime();
         m_tracker->handleCommand(command->tracking(), currentTime);
-        m_strategyTracker->handleCommand(command->tracking(), currentTime);
         m_speedTracker->handleCommand(command->tracking(), currentTime);
         m_simpleTracker->handleCommand(command->tracking(), currentTime);
     }
@@ -510,12 +532,28 @@ void Processor::handleCommand(const Command &command)
             m_simulatorEnabled = m_internalSimulatorEnabled || m_externalSimulatorEnabled;
         }
     }
+
+    if (command->has_tracking() && command->tracking().has_ball_model()) {
+        m_ballModel.CopyFrom(command->tracking().ball_model());
+        if (m_saveBallModel) {
+            saveConfiguration(ballModelConfigFile(m_simulatorEnabled), &m_ballModel);
+        }
+        m_ballModelUpdated = true;
+    }
+    if (simulatorEnabledBefore != m_simulatorEnabled) {
+        loadConfiguration(ballModelConfigFile(m_simulatorEnabled), &m_ballModel, false);
+        m_ballModelUpdated = true;
+    }
+    if (m_ballModelUpdated) {
+        m_tracker->setBallModel(m_ballModel);
+        m_speedTracker->setBallModel(m_ballModel);
+        m_simpleTracker->setBallModel(m_ballModel);
+    }
 }
 
 void Processor::resetTracking()
 {
     m_tracker->reset();
-    m_strategyTracker->reset();
     m_speedTracker->reset();
     m_simpleTracker->reset();
 }

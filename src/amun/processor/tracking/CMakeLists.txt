@@ -18,7 +18,7 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-add_library(tracking
+add_library(tracking STATIC
     include/tracking/tracker.h
 
     abstractballfilter.h
@@ -33,8 +33,6 @@ add_library(tracking
     filter.cpp
     filter.h
     kalmanfilter.h
-    quadraticleastsquaresfitter.cpp
-    quadraticleastsquaresfitter.h
     robotfilter.cpp
     robotfilter.h
     tracker.cpp

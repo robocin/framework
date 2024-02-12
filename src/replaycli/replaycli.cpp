@@ -18,13 +18,15 @@
  *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
-#include <QCoreApplication>
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <clocale>
 #include <QtGlobal>
 #include <iostream>
 #include <fstream>
+#include <memory>
 
 #include "seshat/logfilereader.h"
 #include "seshat/visionlogliveconverter.h"
@@ -78,6 +80,11 @@ int main(int argc, char* argv[])
     QCommandLineOption printAllTimings({"a", "all"}, "Print all timings for every frame");
     QCommandLineOption runs({"r", "runs"}, "Ammount of runs, optional. Uses 1 if missing", "numRuns", "1");
     QCommandLineOption prefix({"p", "prefix"}, "Prefix for outputFiles. Uses std::cout for output if missing", "prefix");
+    QCommandLineOption csv(
+        "csv",
+        "Write timing information to CSV file. Will generate csvfile.runs.csv (and csvfile.histogram.csv/csvfile.cumulative.csv if these options are set respectively)",
+        "csvfile"
+    );
     QCommandLineOption enablePerformanceMode("enable-performance-mode", "Disable performance mode for the strategy.");
     QCommandLineOption profileFile("profileOutfile", "Perform profiling and output the the result to the specified file", "filename");
     QCommandLineOption profileStart("profileStart", "Only has effect together with profileOutfile: in which log frame to start profiling", "start frame", "0");
@@ -92,6 +99,7 @@ int main(int argc, char* argv[])
     parser.addOption(showHistogramCumulativeOption);
     parser.addOption(runs);
     parser.addOption(prefix);
+    parser.addOption(csv);
     parser.addOption(printAllTimings);
     parser.addOption(enablePerformanceMode);
     parser.addOption(profileFile);
@@ -125,8 +133,9 @@ int main(int argc, char* argv[])
 
     QList<std::function<QPair<std::shared_ptr<StatusSource>, QString>(QString)>> openFunctions =
         {&VisionLogLiveConverter::tryOpen, &LogFileReader::tryOpen};
-    for (auto openFunction : openFunctions) {
-        auto openResult = openFunction(parser.positionalArguments().first());
+    for (const auto &openFunction : openFunctions) {
+        const QStringList arguments = parser.positionalArguments();
+        auto openResult = openFunction(arguments.first());
 
         if (openResult.first != nullptr) {
             logfile = openResult.first;
@@ -150,6 +159,17 @@ int main(int argc, char* argv[])
 
     CompilerRegistry compilerRegistry;
 
+    std::unique_ptr<TimingWriter> timingWriter;
+    if (parser.isSet(csv)) {
+        timingWriter = std::make_unique<CSVWriter>(
+            QFileInfo { parser.value(csv) },
+            parser.isSet(showHistogramOption),
+            parser.isSet(showHistogramCumulativeOption)
+        );
+    } else {
+        timingWriter = std::make_unique<StdoutWriter>();
+    }
+
     for (unsigned int i=0; i < runsI; ++i) {
         if (redirect) {
             //keep the reference to filename bytes alive
@@ -167,7 +187,7 @@ int main(int argc, char* argv[])
         Timer timer;
         timer.setTime(logfile->readStatus(0)->time(), 1.0);
         StrategyType strategyColor = asBlue ? StrategyType::BLUE : StrategyType::YELLOW;
-        std::shared_ptr<GameControllerConnection> connection(new GameControllerConnection(false));
+        auto connection = std::make_shared<StrategyGameControllerMediator>(false);
         std::unique_ptr<Strategy> strategy(new Strategy(&timer, strategyColor, nullptr, &compilerRegistry, connection, false, true));
         std::unique_ptr<ReplayTestRunner> testRunner;
         if (runAsTest) {
@@ -175,7 +195,12 @@ int main(int argc, char* argv[])
             strategy->connect(strategy.get(), SIGNAL(sendStatus(Status)), testRunner.get(), SLOT(handleOriginalStatus(Status)));
         }
 
-        TimingStatistics statistics(asBlue, parser.isSet(printAllTimings), logfile->packetCount() + 1);
+        TimingStatistics statistics {
+            asBlue,
+            timingWriter.get(),
+            parser.isSet(printAllTimings),
+            logfile->packetCount() + 1
+        };
         statistics.connect(strategy.get(), &Strategy::sendStatus, &statistics, &TimingStatistics::handleStatus);
         if (showLog) {
             strategy->connect(strategy.get(), &Strategy::sendStatus, [](const Status& s) {
@@ -270,7 +295,7 @@ int main(int argc, char* argv[])
             testRunner->runFinalReplayJudgement();
         } else {
             // no timing statistics are printed if the cli is used as a replay test runner
-            statistics.printStatistics(parser.isSet(showHistogramOption), parser.isSet(showHistogramCumulativeOption));
+            statistics.printStatistics(i, parser.isSet(showHistogramOption), parser.isSet(showHistogramCumulativeOption));
         }
     }
     return 0;

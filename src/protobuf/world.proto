@@ -35,6 +35,17 @@ message Geometry {
     optional float defense_height = 17 [default = 1.0];
     optional GeometryType type = 18 [default = TYPE_2014];
     optional Division division = 19 [default = A];
+    optional BallModel ball_model = 20;
+}
+
+message BallModel {
+    // rolling friction
+    optional float fast_deceleration = 1;
+    optional float slow_deceleration = 2;
+    optional float switch_ratio = 3;
+    // bounce friction
+    optional float z_damping = 4;
+    optional float xy_damping = 5;
 }
 
 message DivisionDimensions {
@@ -69,6 +80,7 @@ message Ball {
     optional float touchdown_x = 8;
     optional float touchdown_y = 9;
     optional bool is_bouncing = 10;
+    optional float max_speed = 11;
     repeated BallPosition raw = 5;
 }
 
@@ -125,6 +137,7 @@ message State {
     // robot states predicted without trajectories, only from vision data
     repeated Robot simple_tracking_yellow = 11;
     repeated Robot simple_tracking_blue = 12;
+    optional Ball simple_tracking_ball = 17;
     // debug information from the simulator
     repeated SimulatorState reality = 13;
     // data for tracking replay and vision extraction
@@ -138,6 +151,7 @@ message SimulatorState {
     repeated SimRobot blue_robots = 1;
     repeated SimRobot yellow_robots = 2;
     optional SimBall ball = 3;
+    optional int64 time = 4;
 }
 
 message SimBall {
@@ -153,10 +167,10 @@ message SimBall {
 }
 
 message Quaternion {
-    required float real = 1;
-    required float i = 2;
-    required float j = 3;
-    required float k = 4;
+    required float i = 1;
+    required float j = 2;
+    required float k = 3;
+    required float real = 4;
 }
 
 message SimRobot {

@@ -23,6 +23,10 @@
 #include "core/sslprotocols.h"
 #include <QPushButton>
 #include <QSettings>
+#include <QStyleFactory>
+#include <QColorDialog>
+#include <QToolBar>
+#include <QDebug>
 
 const uint DEFAULT_SYSTEM_DELAY = 30; // in ms
 const uint DEFAULT_TRANSCEIVER_CHANNEL = 11;
@@ -41,18 +45,61 @@ const bool DEFAULT_CONTROL_YELLOW = false;
 const QString DEFAULT_MIXED_HOST = QStringLiteral("");
 const uint DEFAULT_MIXED_PORT = SSL_MIXED_TEAM_PORT;
 
-const bool DEFAULT_UI_DARK_MODE_COLORS = false;
-
 const FieldWidgetAction DEFAULT_ROBOT_DOUBLE_CLICK_ACTION = FieldWidgetAction::ToggleVisualization;
 const QString DEFAULT_ROBOT_DOUBLE_CLICK_SEARCH_STRING_2020 = ".*: <id>";
 const QString DEFAULT_ROBOT_DOUBLE_CLICK_SEARCH_STRING = ".*: <id><team-s>";
 
-const FieldWidgetAction DEFAULT_ROBOT_CTRL_CLICK_ACTION = FieldWidgetAction::None;
-const QString DEFAULT_ROBOT_CTRL_CLICK_SEARCH_STRING = "";
+const FieldWidgetAction DEFAULT_ROBOT_CTRL_CLICK_ACTION = FieldWidgetAction::SetDebugSearch;
+const QString DEFAULT_ROBOT_CTRL_CLICK_SEARCH_STRING = "<team>/agent <id>";
 
-const QString DEFAULT_NUMBER_KEYS_USAGE = "Internal Referee";
+const QString DEFAULT_NUMBER_KEYS_USAGE = "Simulator Speed";
 const QString CURRENT_CONFIG_DATE = "20210112";
 const QString PREALL_CONFIG_DATE = "20201212";
+
+const float DEFAULT_SCROLL_SENSITIVITY = 1;
+
+static QPalette createQPalette(const QColor foreground, const QColor background, const QColor alternateBackground,
+                               const QColor disabled, const QColor highlight, const QColor link) {
+    QPalette palette;
+    palette.setColor(QPalette::Window, background);
+    palette.setColor(QPalette::WindowText, foreground);
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
+
+    const int backgroundValue = background.value();
+    const int foregroundValue = foreground.value();
+    const bool isDarkMode = backgroundValue < foregroundValue;
+    const auto base = isDarkMode ? background.darker(150) : background.lighter(150);
+    palette.setColor(QPalette::Base, base);
+    palette.setColor(QPalette::AlternateBase, alternateBackground);
+
+    palette.setColor(QPalette::ToolTipBase, background);
+    palette.setColor(QPalette::ToolTipText, foreground);
+
+    palette.setColor(QPalette::Text, foreground);
+    palette.setColor(QPalette::Disabled, QPalette::Text, disabled);
+
+    palette.setColor(QPalette::Button, background);
+    palette.setColor(QPalette::ButtonText, foreground);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
+
+    palette.setColor(QPalette::BrightText, Qt::white);
+
+    palette.setColor(QPalette::Light, background.lighter(150));
+    palette.setColor(QPalette::Midlight, background.lighter(125));
+    palette.setColor(QPalette::Dark, background.darker(200));
+    palette.setColor(QPalette::Mid, background.darker(150));
+    palette.setColor(QPalette::Shadow, Qt::black);
+
+    palette.setColor(QPalette::Highlight, highlight);
+    palette.setColor(QPalette::HighlightedText, Qt::white);
+    palette.setColor(QPalette::Disabled, QPalette::HighlightedText, disabled);
+
+    palette.setColor(QPalette::Link, link);
+
+    return palette;
+}
+
+static const QStringList COLOR_SCHEME_ITEMS = {"Default", "Light", "Dark", "Custom"};
 
 ConfigDialog::ConfigDialog(QWidget *parent) :
     QDialog(parent),
@@ -66,6 +113,20 @@ ConfigDialog::ConfigDialog(QWidget *parent) :
         ui->doubleClickAction->addItem(robotActionString(action), static_cast<int>(action));
         ui->ctrlClickAction->addItem(robotActionString(action), static_cast<int>(action));
     }
+
+    connect(ui->colorScheme, SIGNAL(currentIndexChanged(int)), this, SLOT(changedPalette(int)));
+    m_defaultPalette = palette();
+
+    const auto availableStyles = QStyleFactory::keys();
+    ui->qStyle->addItems(availableStyles);
+
+    if (availableStyles.size() == 2 && availableStyles.contains("Fusion")) {
+        ui->qStyle->setCurrentText("Fusion");
+    }
+
+    ui->customColors->hide();
+
+    ui->colorScheme->addItems(COLOR_SCHEME_ITEMS);
 }
 
 ConfigDialog::~ConfigDialog()
@@ -103,13 +164,58 @@ void ConfigDialog::sendConfiguration()
 
     emit sendCommand(command);
 
-    emit useDarkModeColors(ui->uiDarkMode->isChecked());
-    emit useNumKeysForReferee(ui->numKeyUsage->currentText() == DEFAULT_NUMBER_KEYS_USAGE);
+    emit useNumKeysForReferee(ui->numKeyUsage->currentText() != DEFAULT_NUMBER_KEYS_USAGE);
 
     emit setRobotDoubleClickAction(static_cast<FieldWidgetAction>(ui->doubleClickAction->currentData().toInt()),
                                    ui->doubleClickSearch->text());
     emit setRobotCtrlClickAction(static_cast<FieldWidgetAction>(ui->ctrlClickAction->currentData().toInt()),
                                  ui->ctrlClickSearch->text());
+
+    emit setScrollSensitivity(ui->scrollSensitivitySpinBox->value());
+
+    const auto style = QStyleFactory::create(ui->qStyle->currentText());
+    const auto colorSchemeSetting = ui->colorScheme->currentText();
+    QPalette palette;
+    if (colorSchemeSetting == "Default") {
+        palette = style->standardPalette();
+    } else if (colorSchemeSetting == "Light") {
+        const auto foreground = QColor(35, 38, 41);
+        const auto background = QColor(239, 240, 241);
+        const auto alternateBackground = QColor(189, 195, 197);
+        const auto disabled = QColor(127, 140, 141);
+        const auto highlight = QColor(61, 174, 233);
+        const auto link = QColor(41, 128, 185);
+        palette = createQPalette(foreground, background, alternateBackground, disabled, highlight, link);
+    } else if (colorSchemeSetting == "Dark") {
+        const auto foreground = QColor(239, 240, 241);
+        const auto background = QColor(49, 54, 59);
+        const auto alternateBackground = QColor(77, 77, 77);
+        const auto disabled = QColor(189, 195, 199);
+        const auto highlight = QColor(61, 174, 233);
+        const auto link = QColor(41, 128, 185);
+        palette = createQPalette(foreground, background, alternateBackground, disabled, highlight, link);
+    } else {
+        const auto customPalette = ui->customColors->getCustomPalette();
+        // const auto foreground = ui->foregroundColor->getColor();
+        // const auto background = ui->backgroundColor->getColor();
+        // const auto alternateBackground = ui->alternateBackgroundColor->getColor();
+        // const auto disabled = ui->disabledColor->getColor();
+        // const auto highlight = ui->highlightColor->getColor();
+        // const auto link = ui->linkColor->getColor();
+        palette = createQPalette(customPalette.foreground, customPalette.background, customPalette.alternateBackground, customPalette.disabled,
+                                 customPalette.highlight, customPalette.link);
+    }
+
+    QApplication::setStyle(style);
+
+    // for some reason you need both to the QApplication::setPalette and the setPalette for every widget
+    // don't ask me why, it's Qt magic
+    QApplication::setPalette(palette);
+    for (auto widget : QApplication::allWidgets()) {
+        widget->setPalette(palette);
+    }
+
+    emit setPalette(palette);
 }
 
 void ConfigDialog::load()
@@ -136,7 +242,6 @@ void ConfigDialog::load()
     ui->mixedHost->setText(s.value("Mixed/Host", DEFAULT_MIXED_HOST).toString());
     ui->mixedPort->setValue(s.value("Mixed/Port", DEFAULT_MIXED_PORT).toUInt());
 
-    ui->uiDarkMode->setChecked(s.value("Ui/DarkModeColors", DEFAULT_UI_DARK_MODE_COLORS).toBool());
     ui->numKeyUsage->setCurrentText(s.value("Ui/NumKeyUsage", DEFAULT_NUMBER_KEYS_USAGE).toString());
 
     FieldWidgetAction robotDoubleClick = static_cast<FieldWidgetAction>(s.value("Ui/RobotDoubleClickAction", static_cast<int>(DEFAULT_ROBOT_DOUBLE_CLICK_ACTION)).toInt());
@@ -155,6 +260,18 @@ void ConfigDialog::load()
         }
 
     }
+
+    ui->scrollSensitivitySpinBox->setValue(s.value("Ui/ScrollSensitivity", DEFAULT_SCROLL_SENSITIVITY).toDouble());
+
+    if (s.contains("Ui/QStyle")) {
+        const auto loadedQStyle = s.value("Ui/QStyle").toString();
+        if (QStyleFactory::keys().contains(loadedQStyle)) {
+            ui->qStyle->setCurrentText(loadedQStyle);
+        }
+        ui->colorScheme->setCurrentText(s.value("Ui/ColorScheme").toString());
+    }
+
+    ui->customColors->load();
 
     sendConfiguration();
 }
@@ -175,12 +292,12 @@ void ConfigDialog::reset()
     ui->networkPortYellow->setValue(DEFAULT_NETWORK_PORT_YELLOW);
     ui->mixedHost->setText(DEFAULT_MIXED_HOST);
     ui->mixedPort->setValue(DEFAULT_MIXED_PORT);
-    ui->uiDarkMode->setChecked(DEFAULT_UI_DARK_MODE_COLORS);
     ui->doubleClickAction->setCurrentText(robotActionString(DEFAULT_ROBOT_DOUBLE_CLICK_ACTION));
     ui->doubleClickSearch->setText(DEFAULT_ROBOT_DOUBLE_CLICK_SEARCH_STRING);
     ui->ctrlClickAction->setCurrentText(robotActionString(DEFAULT_ROBOT_CTRL_CLICK_ACTION));
     ui->ctrlClickSearch->setText(DEFAULT_ROBOT_CTRL_CLICK_SEARCH_STRING);
     ui->numKeyUsage->setCurrentText(DEFAULT_NUMBER_KEYS_USAGE);
+    ui->scrollSensitivitySpinBox->setValue(DEFAULT_SCROLL_SENSITIVITY);
 
     sendConfiguration();
 }
@@ -206,8 +323,6 @@ void ConfigDialog::apply()
     s.setValue("Mixed/Host", ui->mixedHost->text());
     s.setValue("Mixed/Port", ui->mixedPort->value());
 
-    s.setValue(("Ui/DarkModeColors"), ui->uiDarkMode->isChecked());
-
     s.setValue("Ui/RobotDoubleClickAction", ui->doubleClickAction->currentData().toInt());
     s.setValue("Ui/RobotDoubleClickSearch", ui->doubleClickSearch->text());
     s.setValue("Ui/RobotCtrlClickAction", ui->ctrlClickAction->currentData().toInt());
@@ -216,12 +331,18 @@ void ConfigDialog::apply()
     s.setValue("Ui/NumKeyUsage", ui->numKeyUsage->currentText());
     s.setValue("Config/ConfigDialogDefaultVersion", CURRENT_CONFIG_DATE);
 
+    s.setValue("Ui/QStyle", ui->qStyle->currentText());
+    s.setValue("Ui/ColorScheme", ui->colorScheme->currentText());
+    ui->customColors->save();
+
+    s.setValue("Ui/ScrollSensitivity", ui->scrollSensitivitySpinBox->value());
+
     sendConfiguration();
 }
 
 bool ConfigDialog::numKeysUsedForReferee() const
 {
-    return ui->numKeyUsage->currentText() == DEFAULT_NUMBER_KEYS_USAGE;
+    return ui->numKeyUsage->currentText() != DEFAULT_NUMBER_KEYS_USAGE;
 }
 
 QString ConfigDialog::robotActionString(FieldWidgetAction action)
@@ -251,5 +372,13 @@ void ConfigDialog::clicked(QAbstractButton *button)
         break;
     default:
         break;
+    }
+}
+
+void ConfigDialog::changedPalette(int newIndex) {
+    if (newIndex == 3) {
+        ui->customColors->show();
+    } else {
+        ui->customColors->hide();
     }
 }

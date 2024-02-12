@@ -28,17 +28,26 @@ add_executable(cpptests
     amun/strategy/path/linesegment.cpp
     amun/strategy/path/obstacles.cpp
     amun/strategy/path/endinobstaclesampler.cpp
+    amun/strategy/path/escapeobstaclesampler.cpp
+    amun/strategy/path/trajectorypath.cpp
+    amun/amun.cpp
     amun/seshat/combinedlogwriter.cpp
     amun/seshat/logfilereader.cpp
     amun/simulator/simulator.cpp
+    amun/processor/tracking/ballgroundcollisionfilter.cpp
 )
+
+target_compile_definitions(cpptests PRIVATE AMUNCLI_DIR="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
 target_link_libraries(cpptests
     lib::googletest
+    amun::amun
     amun::path
     shared::core
+    shared::config
     amun::seshat
     amun::simulator
+    amun::tracking
     amuncli::testtools
     visionlog
     pthread

@@ -21,15 +21,15 @@
 #ifndef PLOTTERWIDGET_H
 #define PLOTTERWIDGET_H
 
-#include <QGLWidget>
+#include <QOpenGLWidget>
+#include <QPainter>
 #include <QHash>
 #include <QMap>
 
 class Plot;
-class TextureCache;
 class GuiTimer;
 
-class PlotterWidget : public QGLWidget
+class PlotterWidget : public QOpenGLWidget
 {
     Q_OBJECT
 
@@ -71,15 +71,16 @@ private:
     QPointF mapFromScene(double x, double y, double z);
 
     qreal devicePixelRatio() const;
-    void renderText(int x, int y, const QString & str, const QColor color);
-    void renderText(double x, double y, double z, const QString &str, const QColor color);
+    void prepareRenderText(int x, int y, const QString & str, const QColor color);
+    void prepareRenderText(double x, double y, double z, const QString &str, const QColor color);
+	void renderTexts();
 
 private:
     QMap<QString, const Plot*> m_plots;
     QHash<const Plot*, QColor> m_colorMap;
     QList<QColor> m_colorQueue;
     QFont m_font;
-    TextureCache *m_textureCache;
+    QMap<QString, QPixmap> m_textureMap;
     GuiTimer *m_guiTimer;
 
     double m_time;
@@ -93,6 +94,14 @@ private:
     QPointF m_mouseEndPos;
     QPointF m_mousePos;
     bool m_drawMeasurementHelper;
+
+    QPainter m_painter;
+
+    struct RenderTextInfo {
+        QPixmap pixmap;
+        QPointF pos;
+    };
+    std::vector<RenderTextInfo> m_texts;
 
     static const QList<QColor> m_colors;
 };

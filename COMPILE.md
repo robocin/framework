@@ -4,10 +4,13 @@ All programs should work on GNU+Linux Mac OS X 10.10 and Windows >= 7.
 Building is tested automatically on recent Ubuntu versions (currently 18.04 and
 20.04)
 
+Currently, the software is also manually tested and proven to run for openSuse Leap and Manjaro
+
 In order to build the framework, you will need:
 - `cmake` >= `3.5` (`3.7` on Windows)
-- `g++` >= `4.6`
+- `g++` >= `7.5`
 - `Qt` >= `5.9` (**NOT** `5.9.[0-2]` on Windows)
+- `libssl`
 
 Also, `protobuf` >= `2.6.0` is required, but will be built from source when no
 suitable version is found.
@@ -25,9 +28,9 @@ Certain features require additional libraries:
   * [Required packages](#required-packages)
     * [Ubuntu 18.04/20.04](#ubuntu-18042004)
     * [Manjaro](#manjaro)
+    * [Open Suse](#open-suse)
   * [Building V8 (optional)](#building-v8-optional-needed-for-javascript-support)
-    * [Building V8 inside Docker](#building-v8-inside-docker)
-  * [Building Ra](#building-the-framework)
+  * [Building the Framework](#building-the-framework)
 - [Windows](#windows)
   * [Setup](#setup)
   * [Compiling](#compiling)
@@ -50,52 +53,49 @@ faster.
 #### Ubuntu 18.04/20.04
 The package names are
 ```
-cmake protobuf-compiler libprotobuf-dev qtbase5-dev libqt5opengl5-dev g++ libusb-1.0-0-dev libsdl2-dev libqt5svg5-dev
+cmake protobuf-compiler libprotobuf-dev qtbase5-dev libqt5opengl5-dev g++ libusb-1.0-0-dev libsdl2-dev libqt5svg5-dev libssl-dev
 ```
 where `protobuf-compiler` and `libprotobuf-dev` will be built from source if
 not already installed.
 #### Manjaro
 The package names are
 ```
-cmake qt5-base patch pck-conf sdl2 libusb pkgconf
+cmake qt5-base patch pck-conf sdl2 libusb pkgconf openssl
 ```
 There is a provided `protobuf` package, however its current version breaks
 compilation. It is advisable to let the build system build `protobuf` from
 source.
 
+#### Open Suse
+The required packages can be installed with
+```
+sudo zypper install git cmake libqt5-qtbase-devel libusb-1_0-devel libqt5-qtsvg-devel python2-pip libudev-devel patch glu-devel openssl-devel
+```
+
+For building V8 you need to select pip2 as pip, with
+```
+sudo alternatives --config pip
+```
+
+Currently, builing the firmware on open suse is not supported.
+To ignore the firmware, even if you already have some arm compiler installed, use
+```
+cmake -DBUILD_FIRMWARE=false ..
+```
+
+instead of the normale cmake command (`cmake ..`)
+
 ### Building V8 (optional, needed for Javascript support)
 Note, that this is **not required** for the simulator.
 
-To build V8, `git` and `python2` are required to be executable commands.
-The package names are
+There are multiple options to obtain V8 binaries.
 
-| Distribution       | Packages              |
-|--------------------|-----------------------|
-| Ubuntu 20.04       | `git python2` |
-| Ubuntu 18.04       | `git python` |
-| Manjaro            | `git python2` |
+1. Download the precompiled version through CMake by specifying the `DOWNLOAD_V8` option.
+To do so, invoke `cmake` using `cmake -DDOWNLOAD_V8=ON`
+This might not support all operating systems or distributions.
 
-Also, the `python` command needs to be available and point to `python2`. On
-Ubuntu 18.04, this is already the case when installing these
-packages. **On Ubuntu 20.04 and Manjaro** you'll need to **temporarily** symlink
-`python` to point to `python2` with
-```
-$ sudo ln -nfs /usr/bin/python{2,}
-```
-Remember to undo the link later, either by linking back to `python3` or by
-deleting the symlink, depending on your system's default.
-
-On Ubuntu 20.04, you can also install `python-is-python2`.
-
-Finally, run the following in the repository root directory
-```
-$ libs/v8/build.sh
-```
-
-#### Building V8 inside Docker
-You can also build V8 inside a Docker container and copy out the result. Take a
-look at [`data/docker/README.md`](data/docker/README.md).
-
+2. Build V8 yourself.
+Take a look at [`data/scripts/README.md`](data/scripts/README.md).
 ### Building the Framework
 
 The recommended way of building a project with CMake is by doing an
@@ -105,6 +105,26 @@ mkdir build && cd build
 cmake ..
 make
 ```
+
+Alternatively in order to select which Qt-Installation to use specify it using a similar command line:
+```
+cmake -DCMAKE_PREFIX_PATH=~/Qt/5.6/gcc_64/lib/cmake ..
+```
+
+In order to download and use the precompiled V8, use:
+```
+cmake -DDOWNLOAD_V8=TRUE ..
+```
+
+The framework has an "easy mode" version we use to introduce new members to our software.
+It disables some of the features to make it less likely for new people to accidentally change something they didn't want to change.
+For example the simulator, kicker and internal referee can't be disabled in this version.
+It also changes the default config to make it easier to just start, e.g. select all robots.
+To build the easy mode version use:
+```
+cmake -DEASY_MODE=TRUE ..
+```
+
 To be able to use the USB transceiver / JTAG programmer the rights for udev have to be modified.
 This only needs to be done once.
 ```
@@ -115,11 +135,6 @@ Ra and the Logplayer can be started from the build/bin/ directory.
 To install the desktop files use this command:
 ```
 make install-menu
-```
-
-In order to select which Qt-Installation to use specify it using a similar command line:
-```
-cmake -DCMAKE_PREFIX_PATH=~/Qt/5.6/gcc_64/lib/cmake ..
 ```
 
 ## Windows
@@ -186,6 +201,9 @@ To compile Ra, run the following commands
 $ libs/v8/build.sh
 $ mkdir build-win && cd build-win
 $ cmake -GNinja -DCMAKE_PREFIX_PATH="$USED_QT" -DCMAKE_BUILD_TYPE=Release ..
+```
+Then close the shell to reset the PATH variable and in the new shell you can build with
+```
 $ cmake --build .
 $ cmake --build . --target assemble
 ```
@@ -206,7 +224,7 @@ the following steps:
   Then select the folder containing the `winusbcompat.inf`.
 
 ## macOS
-Homebrew requires Xcode and Command Line Utilities. 
+Homebrew requires Xcode and Command Line Utilities.
 
 Install Xcode from the App Store, run it once and then install the utilities with:
 ```

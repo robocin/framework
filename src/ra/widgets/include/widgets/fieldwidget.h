@@ -59,7 +59,7 @@ private:
         VisionBall() : ball(nullptr) {}
         VisionBall(QGraphicsEllipseItem *ellipse) : ball(ellipse) {}
         QGraphicsEllipseItem *ball;
-        bool seenThisFrame;
+        bool seenThisFrame = false;
     };
 
     typedef QMultiMap<qint64, QGraphicsEllipseItem *> TraceMap;
@@ -92,7 +92,7 @@ private:
         QMap<TrackingFrom, Status> lastWorldState;
         world::Geometry geometry;
         // save status to avoid copying the debug values
-        QMap<int, Status> visualizations;
+        QMap<amun::DebugSource, Status> visualizations;
     };
 
 public:
@@ -122,6 +122,7 @@ public slots:
     void toggleStrategyVisualizations();
     void setRegularVisualizationsEnabled(bool blue, bool enabled);
     void internalRefereeEnabled(bool enabled);
+    void setScrollSensitivity(float sensitivity);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -173,7 +174,7 @@ private:
     void updateGeometry();
     void updateInfoText();
     void updateVisualizations();
-    void updateVisualizations(const amun::DebugValues &v);
+    void updateVisualizations(const amun::DebugValues &v, const bool grey = false);
     void clearTeamData(RobotMap &team);
     void updateTeam(RobotMap &team, QHash<uint, robot::Specs> &specsMap, const robot::Team &specs);
     void setBall(const world::Ball &ball);
@@ -192,6 +193,7 @@ private:
     void drawLines(QPainter *painter, QRectF rect, bool cosmetic);
     void drawGoal(QPainter *painter, float side, bool cosmetic);
     QGraphicsItem* createCircle(const QPen &pen, const QBrush &brush, const amun::Visualization &vis);
+    QGraphicsItem* createFieldFunction(const amun::Visualization &vis);
     QGraphicsItem* createPolygon(const QPen &pen, const QBrush &brush, const amun::Visualization &vis);
     QGraphicsItem* createPath(const QPen &pen, const QBrush &brush, const amun::Visualization &vis);
     void switchScene(int scene);
@@ -226,6 +228,7 @@ private:
     QAction *m_actionGL;
     QAction *m_actionShowVision;
     QAction *m_actionRestoreSimulatorState;
+    QAction *m_actionFollowBall;
 
     std::string m_geometryString;
     bool m_geometryUpdated;
@@ -246,12 +249,13 @@ private:
     unsigned int m_currentScene = 0;
     QVector<DrawScene> m_drawScenes;
 
-    QMap<int, bool> m_visibleVisSources;
-    QMap<int, int> m_debugSourceCounter;
+    QMap<amun::DebugSource, bool> m_visibleVisSources;
+    QMap<amun::DebugSource, int> m_debugSourceCounter;
     bool m_visualizationsUpdated;
     amun::GameState m_gameState;
 
-    QGraphicsEllipseItem *m_ball;
+    QGraphicsEllipseItem *m_rollingBall;
+    QGraphicsEllipseItem *m_flyingBall;
     QGraphicsEllipseItem *m_realBall = nullptr;
     QStringList m_visibleVisualizations;
     typedef QList<QGraphicsItem*> Items;
@@ -302,6 +306,9 @@ private:
     TrackingFrom m_trackingFrom;
     world::SimulatorState m_lastSimulatorState;
     int m_statesWithoutSimulatorReality = 0;
+
+    float m_scrollSensitivity = 1.0;
+    bool m_isExportingScreenshot = false;
 };
 
 #endif // FIELDWIDGET_H

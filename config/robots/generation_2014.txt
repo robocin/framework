@@ -2,7 +2,6 @@ default {
   generation: 3
   year: 2014
   id: 0
-  type: Regular
   radius: 0.089
   height: 0.138
   mass: 1.5
@@ -31,6 +30,11 @@ default {
   }
   shoot_radius: 0.067
   dribbler_height: 0.04
+  type: Regular
+  simulation_limits {
+    a_speedup_wheel_max: 35
+    a_brake_wheel_max: 30
+  }
 }
 robot {
   id: 0

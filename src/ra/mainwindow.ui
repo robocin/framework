@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>905</width>
-    <height>485</height>
+    <height>489</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -29,7 +29,14 @@
       <property name="orientation">
        <enum>Qt::Horizontal</enum>
       </property>
-      <widget class="DebugWidget" name="debugTree" native="true"/>
+      <widget class="DebugWidget" name="debugTree" native="true">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+      </widget>
       <widget class="QSplitter" name="splitterV">
        <property name="orientation">
         <enum>Qt::Vertical</enum>
@@ -95,7 +102,7 @@
      <x>0</x>
      <y>0</y>
      <width>905</width>
-     <height>22</height>
+     <height>30</height>
     </rect>
    </property>
    <widget class="QMenu" name="menu_Game">
@@ -292,6 +299,34 @@
    </attribute>
    <widget class="TimingWidget" name="timing"/>
   </widget>
+  <widget class="QDockWidget" name="dockStrategy">
+   <property name="sizePolicy">
+    <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+     <horstretch>0</horstretch>
+     <verstretch>0</verstretch>
+    </sizepolicy>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>69</width>
+     <height>42</height>
+    </size>
+   </property>
+   <property name="windowTitle">
+    <string>Strategies</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="StrategySelectionWidget" name="strategies">
+    <property name="sizePolicy">
+     <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+      <horstretch>0</horstretch>
+      <verstretch>0</verstretch>
+     </sizepolicy>
+    </property>
+   </widget>
+  </widget>
   <widget class="QDockWidget" name="dockRobots">
    <property name="windowTitle">
     <string>Robots</string>
@@ -333,7 +368,7 @@
     <string>Replay</string>
    </property>
    <attribute name="dockWidgetArea">
-    <number>1</number>
+    <number>2</number>
    </attribute>
    <widget class="ReplayTeamWidget" name="replay"/>
   </widget>
@@ -364,6 +399,16 @@
     <bool>false</bool>
    </attribute>
    <addaction name="actionAboutUs"/>
+   <addaction name="actionGitInfo"/>
+  </widget>
+  <widget class="QDockWidget" name="dockFieldParameters">
+   <property name="windowTitle">
+    <string>Field Parameters</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="FieldParameters" name="fieldParameters"/>
   </widget>
   <action name="actionPlotter">
    <property name="text">
@@ -400,7 +445,8 @@
     <string>&amp;Record file</string>
    </property>
    <property name="toolTip">
-    <string>Record File</string>
+    <string>Records what you see on the field, until
+toggled again (disables the backlog when active)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+R</string>
@@ -480,7 +526,10 @@
     <string>20s</string>
    </property>
    <property name="toolTip">
-    <string>Save Backlog</string>
+    <string>Saves the last 20s of simulation
+If you are currently playing a backlog in Horus mode,
+you are precisely watching this 20s, so this button saves
+what you are watching.</string>
    </property>
   </action>
   <action name="actionSaveBackloglog">
@@ -491,7 +540,8 @@
     <string>20s (log)</string>
    </property>
    <property name="toolTip">
-    <string>Save Backloglog</string>
+    <string>Does nothing in Ra mode, and saves the last 20s
+of continuous playback (including replay).</string>
    </property>
   </action>
   <action name="actionSave20s">
@@ -751,7 +801,8 @@
     <string>Record file</string>
    </property>
    <property name="toolTip">
-    <string>Record Loglog</string>
+    <string>Records what you see on the field, until
+toggled again (disables the backlog when active)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+R</string>
@@ -775,6 +826,11 @@
   <action name="actionAboutUs">
    <property name="text">
     <string>AboutUs</string>
+   </property>
+  </action>
+  <action name="actionGitInfo">
+   <property name="text">
+    <string>GitInfo</string>
    </property>
   </action>
  </widget>
@@ -833,6 +889,12 @@
    <container>1</container>
   </customwidget>
   <customwidget>
+   <class>StrategySelectionWidget</class>
+   <extends>QWidget</extends>
+   <header>strategyselectionwidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
    <class>RobotSelectionWidget</class>
    <extends>QWidget</extends>
    <header>robotselectionwidget.h</header>
@@ -865,6 +927,12 @@
    <class>SimulatorConfigWidget</class>
    <extends>QWidget</extends>
    <header>simulatorconfigwidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>FieldParameters</class>
+   <extends>QWidget</extends>
+   <header>fieldparameters.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

@@ -57,6 +57,7 @@ public:
     {
         if (tp != nullptr) {
             connect(tp, SIGNAL(gotDebug(amun::DebugValue)), t, SLOT(handleDebug(amun::DebugValue)));
+            connect(tp, SIGNAL(gotLog(QString)), t, SLOT(handleLog(QString)));
             connect(tp, SIGNAL(gotVisualization(amun::Visualization)), t, SLOT(handleVisualization(amun::Visualization)));
         }
     }
@@ -245,11 +246,7 @@ static void pathTest(QTPath *wrapper, const FunctionCallbackInfo<Value>& args, i
         return;
     }
 
-    float radius;
-    if (!verifyNumber(args.GetIsolate(), args[1 + offset], radius)) {
-        return;
-    }
-    const bool ret = wrapper->path()->testSpline(spline, radius);
+    const bool ret = wrapper->path()->testSpline(spline);
     args.GetReturnValue().Set(Boolean::New(args.GetIsolate(), ret));
 
     wrapper->typescript()->addPathTime((Timer::systemTime() - t) / 1E9);
@@ -259,6 +256,7 @@ GENERATE_FUNCTIONS(pathTest);
 static void pathGet(QTPath *wrapper, const FunctionCallbackInfo<Value>& args, int offset)
 {
     Isolate *isolate = args.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
     const qint64 t = Timer::systemTime();
 
     // robot radius must have been set before
@@ -284,11 +282,11 @@ static void pathGet(QTPath *wrapper, const FunctionCallbackInfo<Value>& args, in
     Local<String> rightString = v8string(isolate, "right");
     for (const Path::Waypoint &wp : list) {
         Local<Object> wayPoint = Object::New(isolate);
-        wayPoint->Set(pxString, Number::New(isolate, double(wp.x)));
-        wayPoint->Set(pyString, Number::New(isolate, double(wp.y)));
-        wayPoint->Set(leftString, Number::New(isolate, double(wp.l)));
-        wayPoint->Set(rightString, Number::New(isolate, double(wp.r)));
-        result->Set(i++, wayPoint);
+        wayPoint->Set(context, pxString, Number::New(isolate, double(wp.x))).Check();
+        wayPoint->Set(context, pyString, Number::New(isolate, double(wp.y))).Check();
+        wayPoint->Set(context, leftString, Number::New(isolate, double(wp.l))).Check();
+        wayPoint->Set(context, rightString, Number::New(isolate, double(wp.r))).Check();
+        result->Set(context, i++, wayPoint).Check();
     }
 
     wrapper->typescript()->addPathTime((Timer::systemTime() - t) / 1E9);
@@ -300,6 +298,7 @@ static void trajectoryPathGet(const FunctionCallbackInfo<Value>& args)
 {
     QTPath *wrapper = static_cast<QTPath*>(Local<External>::Cast(args.Data())->Value());
     Isolate *isolate = args.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
     const qint64 t = Timer::systemTime();
 
     // robot radius must have been set before
@@ -331,12 +330,12 @@ static void trajectoryPathGet(const FunctionCallbackInfo<Value>& args)
     Local<String> timeString = v8string(isolate, "time");
     for (const auto &p : trajectory) {
         Local<Object> pathPart = Object::New(isolate);
-        pathPart->Set(pxString, Number::New(isolate, double(p.pos.x)));
-        pathPart->Set(pyString, Number::New(isolate, double(p.pos.y)));
-        pathPart->Set(vxString, Number::New(isolate, double(p.speed.x)));
-        pathPart->Set(vyString, Number::New(isolate, double(p.speed.y)));
-        pathPart->Set(timeString, Number::New(isolate, double(p.time)));
-        result->Set(i++, pathPart);
+        pathPart->Set(context, pxString, Number::New(isolate, double(p.state.pos.x))).Check();
+        pathPart->Set(context, pyString, Number::New(isolate, double(p.state.pos.y))).Check();
+        pathPart->Set(context, vxString, Number::New(isolate, double(p.state.speed.x))).Check();
+        pathPart->Set(context, vyString, Number::New(isolate, double(p.state.speed.y))).Check();
+        pathPart->Set(context, timeString, Number::New(isolate, double(p.time))).Check();
+        result->Set(context, i++, pathPart).Check();
     }
 
     wrapper->typescript()->addPathTime((Timer::systemTime() - t) / 1E9);
@@ -410,6 +409,19 @@ static void trajectoryAddRobotTrajectoryObstacle(const FunctionCallbackInfo<Valu
         return;
     }
     static_cast<QTPath*>(Local<External>::Cast(args.Data())->Value())->trajectoryPath()->world().addFriendlyRobotTrajectoryObstacle(obstacle, prio, radius);
+}
+
+static void trajectoryAddOpponentRobotObstacle(const FunctionCallbackInfo<Value> &args)
+{
+    Isolate * isolate = args.GetIsolate();
+    float x, y, speedX, speedY, priority;
+
+    if (!verifyNumber(isolate, args[0], x) || !verifyNumber(isolate, args[1], y) ||
+            !verifyNumber(isolate, args[2], speedX) || !verifyNumber(isolate, args[3], speedY) ||
+            !verifyNumber(isolate, args[4], priority)) {
+        return;
+    }
+    static_cast<QTPath*>(Local<External>::Cast(args.Data())->Value())->trajectoryPath()->world().addOpponentRobotObstacle(Vector(x, y), Vector(speedX, speedY), priority);
 }
 
 static void trajectoryMaxIntersectingObstaclePrio(const FunctionCallbackInfo<Value> &args)
@@ -497,7 +509,8 @@ static QList<CallbackInfo> trajectoryPathCallbacks = {
     { "getTrajectoryAsObstacle", trajectoryGetLastTrajectoryAsRobotObstacle},
     { "addRobotTrajectoryObstacle", trajectoryAddRobotTrajectoryObstacle},
     { "maxIntersectingObstaclePrio", trajectoryMaxIntersectingObstaclePrio},
-    { "setRobotId",         trajectorySetRobotId}};
+    { "setRobotId",         trajectorySetRobotId},
+    { "addOpponentRobotObstacle",   trajectoryAddOpponentRobotObstacle}};
 
 static void pathCreateNew(const FunctionCallbackInfo<Value>& args)
 {
@@ -561,6 +574,8 @@ static void pathCreateOld(const FunctionCallbackInfo<Value>& args)
 
 void registerPathJsCallbacks(Isolate *isolate, Local<Object> global, Typescript *t)
 {
+    Local<Context> context = isolate->GetCurrentContext();
+
     QList<CallbackInfo> callbacks = {
         { "createPath",         pathCreateNew},
         { "createTrajectoryPath", trajectoryPathCreateNew},
@@ -587,6 +602,6 @@ void registerPathJsCallbacks(Isolate *isolate, Local<Object> global, Typescript 
     });
 
     Local<String> pathStr = v8string(isolate, "path");
-    global->Set(pathStr, pathObject);
+    global->Set(context, pathStr, pathObject).Check();
 }
 #include "js_path.moc"

@@ -94,6 +94,7 @@ struct camun::simulator::SimulatorData
     float robotReplyPacketLoss;
     float missingBallDetections;
     bool dribblePerfect;
+    float missingRobotDetections;
 };
 
 static void simulatorTickCallback(btDynamicsWorld *world, btScalar timeStep)
@@ -167,6 +168,7 @@ Simulator::Simulator(const Timer *timer, const amun::SimulatorSetup &setup, bool
     m_data->robotReplyPacketLoss = 0;
     m_data->missingBallDetections = 0;
     m_data->dribblePerfect = false;
+    m_data->missingRobotDetections = 0;
 
     // no robots after initialisation
 
@@ -402,6 +404,7 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
 {
     const std::size_t numCameras = m_data->reportedCameraSetup.size();
     world::SimulatorState simState;
+    simState.set_time(m_time);
 
     std::vector<SSL_DetectionFrame> detections(numCameras);
     for (std::size_t i = 0;i<numCameras;i++) {
@@ -411,15 +414,18 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
     auto* ball = simState.mutable_ball();
     m_data->ball->writeBallState(ball);
 
-    bool missingBall = m_data->missingBallDetections > 0 && m_data->rng.uniformFloat(0, 1) <= m_data->missingBallDetections;
     const btVector3 ballPosition = m_data->ball->position() / SIMULATOR_SCALE;
-    if (m_time - m_lastBallSendTime >= m_minBallDetectionTime && !missingBall) {
+    if (m_time - m_lastBallSendTime >= m_minBallDetectionTime) {
         m_lastBallSendTime = m_time;
-
 
         for (std::size_t cameraId = 0; cameraId < numCameras; ++cameraId) {
             // at least one id is always valid
             if (!checkCameraID(cameraId, ballPosition, m_data->cameraPositions, m_data->cameraOverlap)) {
+                continue;
+            }
+
+            bool missingBall = m_data->missingBallDetections > 0 && m_data->rng.uniformFloat(0, 1) <= m_data->missingBallDetections;
+            if (missingBall) {
                 continue;
             }
 
@@ -448,8 +454,12 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
 
                 for (std::size_t cameraId = 0; cameraId < numCameras; ++cameraId) {
 
-
                     if (!checkCameraID(cameraId, robotPos, m_data->cameraPositions, m_data->cameraOverlap)) {
+                        continue;
+                    }
+
+                    bool missingRobot = m_data->missingRobotDetections > 0 && m_data->rng.uniformFloat(0, 1) <= m_data->missingRobotDetections;
+                    if (missingRobot) {
                         continue;
                     }
 
@@ -459,7 +469,6 @@ std::tuple<QList<QByteArray>, QByteArray, qint64> Simulator::createVisionPacket(
                     } else {
                         robot->update(detections[cameraId].add_robots_yellow(), m_data->stddevRobot, m_data->stddevRobotPhi, m_time, positionOffset);
                     }
-
 
                     // once in a while, add a ball mis-detection at a corner of the dribbler
                     // in real games, this happens because the ball detection light beam used by many teams is red
@@ -777,6 +786,10 @@ void Simulator::handleCommand(const Command &command)
 
             if (realism.has_missing_ball_detections()) {
                 m_data->missingBallDetections = realism.missing_ball_detections();
+            }
+
+            if (realism.has_missing_robot_detections()) {
+                m_data->missingRobotDetections = realism.missing_robot_detections();
             }
 
             if (realism.has_vision_delay()) {

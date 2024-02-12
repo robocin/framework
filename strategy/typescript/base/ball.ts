@@ -47,8 +47,6 @@ export class Ball {
 	posZ: number = 0;
 	/** Upwards speed in m/s */
 	speedZ: number = 0;
-	/** Current deceleration that is assumed to break the ball */
-	deceleration: number = 0;
 	maxSpeed: number = 0;
 	initSpeedZ: number = 0;
 	touchdownPos: Vector | undefined;
@@ -103,10 +101,10 @@ export class Ball {
 		}
 
 		// check if the ball pos or speed are invalid (might result from tracking) -> then ignore the update
-		let nextPos = Coordinates.toLocal(new Vector(data.p_x, data.p_y));
-		let nextSpeed = Coordinates.toLocal(new Vector(data.v_x, data.v_y));
-		let extraDist = 2;
-		let SIZE_LIMIT = 1000;
+		const nextPos = Coordinates.toLocal(new Vector(data.p_x, data.p_y));
+		const nextSpeed = Coordinates.toLocal(new Vector(data.v_x, data.v_y));
+		const extraDist = 2;
+		const SIZE_LIMIT = 1000;
 		if (nextPos.isNan() || nextSpeed.isNan() || Math.abs(nextPos.x) > SIZE_LIMIT ||
 			Math.abs(nextPos.y) > SIZE_LIMIT || Math.abs(nextSpeed.x) > SIZE_LIMIT || Math.abs(nextSpeed.y) > SIZE_LIMIT) {
 			this._updateLostBall(time);
@@ -136,7 +134,7 @@ export class Ball {
 		}
 		this.isBouncing = !!data.is_bouncing;
 
-		this._updateTrackedState(lastSpeedLength, robots);
+		this._updateTrackedState(data, lastSpeedLength, robots);
 
 		this._updateRawDetections(data.raw);
 	}
@@ -153,48 +151,49 @@ export class Ball {
 		}
 	}
 
-	_updateTrackedState(lastSpeedLength: number, robots?: Robot[]) {
+	_updateTrackedState(data: world.Ball, lastSpeedLength: number, robots?: Robot[]) {
 		// speed tracking
-		// framesDecelerating counts the number of frames since the last extreme acceleration
-		// so even if the ball slowly accelerates, framesDecelerating will not reset
-		if (this.speed.length() - lastSpeedLength > 0.2) {
-			this.framesDecelerating = 0;
+
+		if (data.max_speed != undefined) {
+			this.maxSpeed = data.max_speed;
 		} else {
-			this.ballPosInFrame[this.counter] = this.pos;
-			this.counter += 1;
-			this.framesDecelerating = this.framesDecelerating + 1;
-		}
-		// if the ball does not accelerate extremely for 3 frames straight, the current velocity
-		// is taken as the maximum ball speed
-		if (robots != undefined) {
-			for (let framepos of this.ballPosInFrame) {
-				for (let r of robots) {
-					if (r.pos.distanceToSq(framepos) < MAXSPEED_MIN_ROBOT_DIST * MAXSPEED_MIN_ROBOT_DIST) {
-						this.ballIsNearToRobot = true;
-						break;
+			// WARNING: do not update this code, the max speed calculation is now in the tracking
+
+			// framesDecelerating counts the number of frames since the last extreme acceleration
+			// so even if the ball slowly accelerates, framesDecelerating will not reset
+			if (this.speed.length() - lastSpeedLength > 0.2) {
+				this.framesDecelerating = 0;
+			} else {
+				this.ballPosInFrame[this.counter] = this.pos;
+				this.counter += 1;
+				this.framesDecelerating = this.framesDecelerating + 1;
+			}
+			// if the ball does not accelerate extremely for 3 frames straight, the current velocity
+			// is taken as the maximum ball speed
+			if (robots != undefined) {
+				for (let framepos of this.ballPosInFrame) {
+					for (let r of robots) {
+						if (r.pos.distanceToSq(framepos) < MAXSPEED_MIN_ROBOT_DIST * MAXSPEED_MIN_ROBOT_DIST) {
+							this.ballIsNearToRobot = true;
+							break;
+						}
 					}
 				}
 			}
+			if (this.framesDecelerating === 3 && this.ballIsNearToRobot) {
+				this.ballIsNearToRobot = false;
+				this.counter = 0;
+				this.maxSpeed = this.speed.length();
+			}
+			if (this.counter === 3) {
+				this.counter = 0;
+			}
+			if (this.maxSpeed < this.speed.length()) {
+				this.maxSpeed = this.maxSpeed + 0.3 * (this.speed.length() - this.maxSpeed);
+			}
 		}
-		if (this.framesDecelerating === 3 && this.ballIsNearToRobot) {
-			this.ballIsNearToRobot = false;
-			this.counter = 0;
-			this.maxSpeed = this.speed.length();
-		}
-		if (this.counter === 3) {
-			this.counter = 0;
-		}
-		if (this.maxSpeed < this.speed.length()) {
-			this.maxSpeed = this.maxSpeed + 0.3 * (this.speed.length() - this.maxSpeed);
-		}
-		plot.addPlot("Ball.maxSpeed", this.maxSpeed);
 
-		// set the deceleration depending on the ball's state (sliding or rolling)
-		if (this.speed.length() > Constants.ballSwitchRatio * this.maxSpeed) {
-			this.deceleration = Constants.fastBallDeceleration;
-		} else {
-			this.deceleration = Constants.ballDeceleration;
-		}
+		plot.addPlot("Ball.maxSpeed", this.maxSpeed);
 	}
 
 	/**

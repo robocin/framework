@@ -20,7 +20,6 @@
 
 #include "plotterwidget.h"
 #include "plot.h"
-#include "texturecache.h"
 #include "guihelper/guitimer.h"
 #include <QCursor>
 #include <QLabel>
@@ -46,7 +45,7 @@ const QList<QColor> PlotterWidget::m_colors = QList<QColor>()
         << "gray";
 
 PlotterWidget::PlotterWidget(QWidget *parent) :
-    QGLWidget(parent),
+    QOpenGLWidget(parent),
     m_font(QGuiApplication::font()),
     m_time(0.0),
     m_yMin(-5.0),
@@ -59,7 +58,6 @@ PlotterWidget::PlotterWidget(QWidget *parent) :
     setCursor(Qt::CrossCursor);
 
     m_colorQueue = m_colors;
-    m_textureCache = new TextureCache(context());
 
     // redraw timer
     m_guiTimer = new GuiTimer(30, this);
@@ -69,7 +67,6 @@ PlotterWidget::PlotterWidget(QWidget *parent) :
 
 PlotterWidget::~PlotterWidget()
 {
-    delete m_textureCache;
 }
 
 void PlotterWidget::updateView()
@@ -77,11 +74,14 @@ void PlotterWidget::updateView()
     if (!isVisible()) {
         return;
     }
-    updateGL();
+    QWidget::update();
 }
 
 void PlotterWidget::paintGL()
 {
+    m_painter.begin(this);
+    m_painter.beginNativePainting();
+
     if (m_yMin == m_yMax) {
         return;
     }
@@ -107,7 +107,7 @@ void PlotterWidget::paintGL()
     foreach (const Plot *plot, m_plots) {
         plot->plot(m_colorMap[plot]);
         numPlots++;
-        renderText(10, 20 * numPlots, plot->name(), m_colorMap[plot]);
+        prepareRenderText(10, 20 * numPlots, plot->name(), m_colorMap[plot]);
     }
 
     if (m_drawMeasurementHelper) {
@@ -119,6 +119,14 @@ void PlotterWidget::paintGL()
                                                    QString::number(m_mousePos.y(), 'f', 4));
         drawLabel(width(), height(), true, posString);
     }
+
+    m_painter.endNativePainting();
+
+    // draw texts after native OpenGL calls to not confuse the QPainter object
+    m_painter.setBackgroundMode(Qt::TransparentMode);
+    renderTexts();
+
+    m_painter.end();
 }
 
 void PlotterWidget::drawCoordSys()
@@ -165,13 +173,6 @@ void PlotterWidget::drawCoordSys()
         glVertex2d(m_time - m_duration + m_offset, floorf(m_yMin) + i);
         glVertex2d(m_time + m_offset, floorf(m_yMin) + i);
     }
-    #ifdef AUTOREF_DIR
-    // illustrate allowed shooting speed
-    glColor3f(250, 0, 0);
-    glVertex2d(m_time - m_duration + m_offset, 8);
-    glVertex2d(m_time + m_offset, 8);
-    glColor3f(0.75, 0.75, 0.75); // reset color
-    #endif
 
     // vertical lines
     for (int i = 0; i <= m_duration; i++) {
@@ -183,7 +184,7 @@ void PlotterWidget::drawCoordSys()
 
     for (int i = 0; i < m_yMax - m_yMin + 1; i++) {
         // add y values
-        renderText(m_time - m_duration + m_offset, floorf(m_yMin) + i, 0.0f, QString::number(floorf(m_yMin) + i), QColor(127, 127, 127));
+        prepareRenderText(m_time - m_duration + m_offset, floorf(m_yMin) + i, 0.0f, QString::number(floorf(m_yMin) + i), QColor(127, 127, 127));
     }
 }
 
@@ -248,7 +249,7 @@ void PlotterWidget::drawLabel(int x, int y, bool rightAligned, const QString &st
     // restore matrix
     glPopMatrix();
     // text in dark grey
-    renderText(textx, texty + fm.ascent(), str, QColor(50, 50, 50));
+    prepareRenderText(textx, texty + fm.ascent(), str, QColor(50, 50, 50));
 }
 
 void PlotterWidget::leaveEvent(QEvent *e)
@@ -405,13 +406,14 @@ QPointF PlotterWidget::mapFromScene(double x, double y, double z)
 }
 
 // in widget coordinates!
-void PlotterWidget::renderText(int x, int y, const QString & str, const QColor color)
+void PlotterWidget::prepareRenderText(int x, int y, const QString & str, const QColor color)
 {
-    GLuint textureId = 0;
     QPixmap pixmap;
     QString cacheKey = str + color.name();
     QFontMetrics fm(m_font);
-    if (!m_textureCache->find(cacheKey, &textureId, &pixmap)) {
+
+    const auto texture_iterator = m_textureMap.find(cacheKey);
+    if (texture_iterator == m_textureMap.end()) {
         QRect textSize = fm.boundingRect(str);
         qreal dpr = devicePixelRatio();
         pixmap = QPixmap((textSize.width()+4)*dpr, (textSize.height()+4)*dpr);
@@ -423,26 +425,26 @@ void PlotterWidget::renderText(int x, int y, const QString & str, const QColor c
             painter.setPen(color);
             painter.drawText(2, fm.ascent()+2, str);
         }
-        textureId = m_textureCache->insert(cacheKey, pixmap);
+        m_textureMap.insert(cacheKey, pixmap);
+    } else {
+        pixmap = *texture_iterator;
     }
 
     QPointF pos(x-2, y-2-fm.ascent());
-    // map to widget coordinates
-    glPushMatrix();
-    glLoadIdentity();
-    glOrtho(0, width(), height(), 0, -1, 1);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    drawTexture(QRectF(pos, pixmap.size()/pixmap.devicePixelRatio()), textureId);
-    glDisable(GL_BLEND);
-
-    // restore matrix
-    glPopMatrix();
+    m_texts.push_back({pixmap, pos});
 }
 
-void PlotterWidget::renderText(double x, double y, double z, const QString & str, const QColor color)
+void PlotterWidget::prepareRenderText(double x, double y, double z, const QString & str, const QColor color)
 {
     QPointF pos = mapFromScene(x, y, z);
-    renderText(pos.x(), pos.y(), str, color);
+    prepareRenderText(pos.x(), pos.y(), str, color);
+}
+
+void PlotterWidget::renderTexts()
+{
+    for (const auto [pixmap, pos] : m_texts) {
+        m_painter.drawPixmap(QRectF(pos, pixmap.size()/pixmap.devicePixelRatio()), pixmap, QRectF(QPointF(0, 0), pixmap.size()));
+    }
+    m_texts.clear();
 }

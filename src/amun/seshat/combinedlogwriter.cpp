@@ -22,11 +22,13 @@
 #include "backlogwriter.h"
 #include "logfilewriter.h"
 #include "statussource.h"
+#include "longlivingstatuscache.h"
 
 #include <QThread>
 #include <QDateTime>
 #include <QSettings>
 #include <QCoreApplication>
+#include <QVector>
 
 namespace CombinedLogWriterInternal {
     class SignalSource: public QObject {
@@ -36,7 +38,7 @@ namespace CombinedLogWriterInternal {
         SignalSource(QObject* parent = nullptr) : QObject(parent) {}
 
     signals:
-        void saveBacklogFile(QString filename, const Status &status, bool processEvents);
+        void saveBacklogFile(QString filename, bool processEvents);
         void gotStatusForRecording(const Status &status);
         void gotStatusForBacklog(const Status &status);
 
@@ -47,7 +49,7 @@ namespace CombinedLogWriterInternal {
     };
 
     void SignalSource::emitSaveBacklog(QString filename, const Status &status, bool processEvents) {
-        emit saveBacklogFile(filename, status, processEvents);
+        emit saveBacklogFile(filename, processEvents);
     }
 
     void SignalSource::emitStatusToRecording(const Status &status) {
@@ -68,7 +70,8 @@ CombinedLogWriter::CombinedLogWriter(bool replay, int backlogLength) :
     m_logFileThread(NULL),
     m_lastTime(0),
     m_isLoggingEnabled(true),
-    m_signalSource(new SignalSource(this))
+    m_signalSource(new SignalSource(this)),
+    m_statusCache(new LongLivingStatusCache(this))
 {
     // start backlog writer thread
     m_backlogThread = new QThread();
@@ -79,7 +82,7 @@ CombinedLogWriter::CombinedLogWriter(bool replay, int backlogLength) :
 
     connect(m_backlogWriter, SIGNAL(enableBacklogSave(bool)), this, SLOT(enableLogging(bool)));
     connect(m_signalSource, SIGNAL(gotStatusForBacklog(Status)), m_backlogWriter, SLOT(handleStatus(Status)));
-    connect(m_signalSource, SIGNAL(saveBacklogFile(QString,Status,bool)), m_backlogWriter, SLOT(saveBacklog(QString,Status,bool)));
+    connect(m_signalSource, SIGNAL(saveBacklogFile(QString,bool)), m_backlogWriter, SLOT(saveBacklog(QString,bool)));
     connect(this, SIGNAL(resetBacklog()), m_backlogWriter, SLOT(clear()));
 }
 
@@ -109,7 +112,7 @@ void CombinedLogWriter::sendBacklogStatus(int lastNPackets)
     }
     // source is located in another thread, but when no signals/slots are used this is fine
     std::shared_ptr<StatusSource> source = m_backlogWriter->makeStatusSource();
-    QList<Status> packets;
+    QVector<Status> packets;
     packets.reserve(source->packetCount());
     for (int i = std::max(0, source->packetCount() - lastNPackets);i<source->packetCount();i++) {
         packets.append(source->readStatus(i));
@@ -168,14 +171,6 @@ void CombinedLogWriter::handleStatus(Status status)
         status->set_time(m_lastTime);
     }
 
-    // keep team configurations for the logfile
-    if (status->has_team_yellow()) {
-        m_yellowTeam.CopyFrom(status->team_yellow());
-    }
-    if (status->has_team_blue()) {
-        m_blueTeam.CopyFrom(status->team_blue());
-    }
-
     // keep team names for the logfile
     if (status->has_game_state()) {
         const amun::GameState &state = status->game_state();
@@ -185,6 +180,8 @@ void CombinedLogWriter::handleStatus(Status status)
         const SSL_Referee_TeamInfo &teamYellow = state.yellow();
         m_yellowTeamName = QString::fromStdString(teamYellow.name());
     }
+
+    m_statusCache->handleStatus(status);
 
     if (status->has_pure_ui_response()) {
         return;
@@ -239,9 +236,8 @@ void CombinedLogWriter::saveBackLog()
 {
     const QString filename = createLogFilename();
 
-    Status status(new amun::Status);
-    status->mutable_team_yellow()->CopyFrom(m_yellowTeam);
-    status->mutable_team_blue()->CopyFrom(m_blueTeam);
+    Status status{getTeamStatus()};
+    status->clear_time();
 
     m_signalSource->emitSaveBacklog(filename, status, true);
 }
@@ -297,16 +293,16 @@ QString CombinedLogWriter::createLogFilename() const
 
 Status CombinedLogWriter::getTeamStatus()
 {
-    Status status(new amun::Status);
-    status->set_time(m_lastTime);
-    status->mutable_team_yellow()->CopyFrom(m_yellowTeam);
-    status->mutable_team_blue()->CopyFrom(m_blueTeam);
-    return status;
+    return m_statusCache->getTeamStatus();
 }
 
 void CombinedLogWriter::startLogfile()
 {
-    m_logFile->writeStatus(getTeamStatus());
+    connect(m_statusCache, &LongLivingStatusCache::sendStatus, m_logFile, &LogFileWriter::writeStatus);
+    connect(m_statusCache, &LongLivingStatusCache::sendStatus, m_backlogWriter, &BacklogWriter::handleStatus);
+    m_statusCache->publish();
+    disconnect(m_statusCache, &LongLivingStatusCache::sendStatus, m_logFile, &LogFileWriter::writeStatus);
+    disconnect(m_statusCache, &LongLivingStatusCache::sendStatus, m_backlogWriter, &BacklogWriter::handleStatus);
     m_logState = LogState::LOGGING;
 }
 

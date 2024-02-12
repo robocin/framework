@@ -25,7 +25,7 @@ add_subdirectory(gamecontroller)
 add_subdirectory(seshat)
 add_subdirectory(internalreferee)
 
-add_library(amun
+add_library(amun STATIC
     include/amun/amun.h
     include/amun/amunclient.h
 
@@ -39,6 +39,8 @@ add_library(amun
     optionsmanager.h
     commandconverter.cpp
     commandconverter.h
+	gitinforecorder.cpp
+	gitinforecorder.h
 )
 target_link_libraries(amun
     PRIVATE shared::core
@@ -51,6 +53,7 @@ target_link_libraries(amun
     PRIVATE Qt5::Network
     PUBLIC amun::gamecontroller
     PUBLIC amun::internalreferee
+    PUBLIC gitconfig
 )
 target_include_directories(amun
     INTERFACE include

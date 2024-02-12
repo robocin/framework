@@ -22,225 +22,196 @@
 #include "path/standardsampler.h"
 #include "core/protobuffilesaver.h"
 #include "core/rng.h"
+#include "core/run_out_of_scope.h"
 
-const static float GENERAL_MAX_SPEED = 3.5f;
+const float FAILURE_SCORE_FACTOR = 5;
 
-static StandardTrajectorySample randomSample(RNG &rng, float maxSpeed, float maxDistance)
+static void showTotalScore(std::vector<Situation> allSituations)
 {
-    Vector currentMidSpeed = Vector(rng.uniformFloat(-maxSpeed, maxSpeed),
-                         rng.uniformFloat(-maxSpeed, maxSpeed));
-    while (currentMidSpeed.length() > maxSpeed) {
-        currentMidSpeed *= 0.9f;
+    PathDebug debug;
+
+    RNG rng{1};
+
+    const int MAX_ROBOTS = 21;
+    std::vector<WorldInformation> worlds{MAX_ROBOTS, WorldInformation{}};
+    std::vector<PrecomputedStandardSampler> samplers;
+    for (int i = 0;i<MAX_ROBOTS;i++) {
+        samplers.emplace_back(&rng, worlds[i], debug);
     }
-    float currentTime = rng.uniformFloat(0.001f, std::min(6.0f, 2.0f * maxDistance));
-    float currentAngle = rng.uniformFloat(0, 7);
 
-    return StandardTrajectorySample(currentTime, currentAngle, currentMidSpeed);
-}
+    int foundPath = 0;
+    float partialScore = 0;
+    float totalScore = 0;
+    int counter = 0;
+    for (auto &sit : allSituations) {
+        rng.seed(++counter);
 
-static StandardTrajectorySample modifySample(const StandardTrajectorySample &input, RNG &rng, const float radius, const float maxSpeed)
-{
-    StandardTrajectorySample point = input;
-    point.setMidSpeed(point.getMidSpeed() + Vector(rng.uniformFloat(-radius, radius), rng.uniformFloat(-radius, radius)));
-    while (point.getMidSpeed().length() > maxSpeed) {
-        point.setMidSpeed(point.getMidSpeed() * 0.95f);
-    }
-    point.setTime(std::max(0.001f, point.getTime() + rng.uniformFloat(-0.1f, 0.1f)));
-    point.setAngle(point.getAngle() + rng.uniformFloat(-0.1f, 0.1f));
-    return point;
-}
+        PrecomputedStandardSampler &sampler = samplers.at(sit.world.robotId());
+        WorldInformation &world = worlds.at(sit.world.robotId());
+        world = sit.world;
+        world.collectObstacles();
+        if (sampler.compute(sit.input)) {
+            foundPath++;
 
-// optimization
-static std::vector<float> evaluateSample(RNG &rng, const std::vector<Situation> &scenarios, const StandardTrajectorySample &sample)
-{
-    std::vector<float> result;
-    for (const auto &s : scenarios) {
-        StandardTrajectorySample denormalized = sample.denormalize(s.input);
-
-        if (denormalized.getMidSpeed().lengthSquared() >= s.input.maxSpeedSquared) {
-            denormalized.setMidSpeed(denormalized.getMidSpeed().normalized() * s.input.maxSpeed);
-        }
-        PathDebug debug;
-        // do not load the precomputation file every time for this
-        StandardSampler sampler(&rng, s.world, debug, false);
-
-        float sampleResult = sampler.checkSample(s.input, denormalized, std::numeric_limits<float>::max());
-        if (sampleResult >= 0) {
-            result.push_back(sampleResult);
+            // TODO: use a better metric here
+            partialScore += sampler.getScore();
+            totalScore += sampler.getScore();
         } else {
-            result.push_back(std::numeric_limits<float>::max());
+            const float failureScore = FAILURE_SCORE_FACTOR * sit.input.target.pos.distance(sit.input.start.pos);
+            totalScore += failureScore;
         }
     }
-    return result;
+
+    std::cout <<"Found soluation in "<<foundPath<<" / "<<allSituations.size()<<" situations"<<std::endl;
+    std::cout <<"Average score: "<<(partialScore / foundPath)<<std::endl;
+    std::cout <<"Score with failures: "<<(totalScore / allSituations.size())<<std::endl<<std::endl;
 }
 
-static std::vector<StandardTrajectorySample> optimize(RNG &rng, std::vector<Situation> &scenarios, float maxDistance)
+// new generalized optimization
+
+using SamplerCache = std::vector<std::vector<std::pair<StandardTrajectorySample, StandardSampler::SampleScore>>>;
+class CachingSampler : public PrecomputedStandardSampler
 {
-    const std::size_t TARGET_POINT_COUNT = 30;
-    const std::size_t SAMPLE_TEST_COUNT = 20000;
-    const int TOTAL_RANDOM_PERCENTAGE = 30;
+public:
+    CachingSampler(RNG *rng, const WorldInformation &world, PathDebug &debug, SamplerCache &cache) :
+        PrecomputedStandardSampler(rng, world, debug),
+        cache(cache)
+    { }
 
-    const float INF = std::numeric_limits<float>::max();
+    void setSituationCounter(int counter) { situationCounter = counter; }
 
-    std::vector<StandardTrajectorySample> result;
+private:
+    SampleScore checkSample(const TrajectoryInput &input, const StandardTrajectorySample &sample, const float currentBestTime) override
+    {
+        // TODO: dont duplicate
+        const float MINIMUM_TIME_IMPROVEMENT = (input.target.pos - input.start.pos).lengthSquared() > 1 ? 0.05f : 0.0f;
 
-    std::vector<std::vector<float>> currentValues(TARGET_POINT_COUNT);
+        RUN_WHEN_OUT_OF_SCOPE({ sampleCounter++; });
+        if (sampleCounter < cache[situationCounter].size() && cache[situationCounter][sampleCounter].first == sample) {
+            const SampleScore cached = cache[situationCounter][sampleCounter].second;
+            if (cached.type == ScoreType::EXACT || (cached.type == ScoreType::WORSE_THAN && cached.score > currentBestTime)) {
 
-    // initialize with random samples
-    for (std::size_t i = 0;i<TARGET_POINT_COUNT;i++) {
-        result.push_back(randomSample(rng, GENERAL_MAX_SPEED, maxDistance));
-
-        currentValues[i] = evaluateSample(rng, scenarios, result.back());
-    }
-
-    for (std::size_t i = 0;i<SAMPLE_TEST_COUNT;i++) {
-        // generate sample to test
-        const std::size_t modifyId = rand() % TARGET_POINT_COUNT;
-        StandardTrajectorySample modified;
-        if (rand() % 100 < TOTAL_RANDOM_PERCENTAGE) {
-            modified = randomSample(rng, GENERAL_MAX_SPEED, maxDistance);
-        } else {
-            const float RADIUS = 0.15f;
-            modified = modifySample(result[modifyId], rng, RADIUS, GENERAL_MAX_SPEED);
-        }
-
-        // evaluate
-        std::vector<float> times = evaluateSample(rng, scenarios, modified);
-
-        // check if it is an improvement
-        float totalGain = 0;
-        int foundCount = 0;
-        float foundTotalTime = 0;
-        for (std::size_t j = 0;j<scenarios.size();j++) {
-            float minTimeWithout = INF;
-            float totalMinTime = INF;
-
-            for (std::size_t i = 0;i<TARGET_POINT_COUNT;i++) {
-                if (i != modifyId) {
-                    minTimeWithout = std::min(minTimeWithout, currentValues[i][j]);
+                if (cached.type == ScoreType::EXACT && cached.score < currentBestTime - MINIMUM_TIME_IMPROVEMENT && cached.score < std::numeric_limits<float>::max()) {
+                    m_bestResultInfo.time = cached.score;
+                    m_bestResultInfo.valid = true;
+                    m_bestResultInfo.sample = sample;
                 }
-                totalMinTime = std::min(totalMinTime, currentValues[i][j]);
-            }
 
-            if (totalMinTime < INF) {
-                foundCount++;
-                foundTotalTime += totalMinTime;
-            }
-
-            float before = totalMinTime;
-            float after = std::min(minTimeWithout, times[j]);
-            if (before < INF && after == INF) {
-                totalGain -= std::max(0.4f, 8 * maxDistance - before);
-            } else if (before == INF && after < INF) {
-                totalGain += std::max(0.4f, 4 * maxDistance - after);
-            } else if (before < INF && after < INF) {
-                totalGain += before - after;
+                return cached;
             }
         }
-
-        // change values if the current sample is better
-        //std::cout <<totalGain<<std::endl;
-        if (totalGain > 0) {
-            result[modifyId] = modified;
-            currentValues[modifyId] = times;
-
-            if (rand() % 50 == 0) {
-                std::cout <<"Found better: "<<foundCount<<" and "<<foundTotalTime / foundCount<<std::endl;
-            }
+        const SampleScore result = StandardSampler::checkSample(input, sample, currentBestTime);
+        if (sampleCounter < cache[situationCounter].size()) {
+            cache[situationCounter][sampleCounter] = {sample, result};
+        } else {
+            cache[situationCounter].emplace_back(sample, result);
         }
+        return result;
     }
 
-    return result;
-}
+    void computeSamples(const TrajectoryInput &input, const StandardSamplerBestTrajectoryInfo &lastBest) override
+    {
+        sampleCounter = 0;
+        PrecomputedStandardSampler::computeSamples(input, lastBest);
+    }
 
-constexpr std::size_t SCENARIO_SEGMENTS = 20;
-constexpr float MAX_DISTANCE = 8.0f;
+private:
+    std::size_t sampleCounter = 0;
+    std::size_t situationCounter = 0;
+    SamplerCache &cache;
+};
 
-static std::vector<std::vector<Situation>> segmentSituations(const std::vector<Situation> &situations)
+static float samplerScore(const std::vector<Situation> &situations, const PrecomputedStandardSampler &testSampler, SamplerCache &cache)
 {
-    std::vector<std::vector<Situation>> segmentedSituations;
-    for (std::size_t i = 0;i<SCENARIO_SEGMENTS;i++) {
-        segmentedSituations.push_back({});
-    }
-    for (const auto &s : situations) {
-        float distance = s.input.s0.distance(s.input.s1);
-        std::size_t segment = static_cast<std::size_t>(SCENARIO_SEGMENTS * distance / MAX_DISTANCE);
-        segment = std::min(SCENARIO_SEGMENTS-1, segment);
-        segmentedSituations[segment].push_back(s);
-    }
-    return segmentedSituations;
-}
-
-//  sorts the input into two categories: <situations which have a solution, those without one>
-static std::pair<std::vector<Situation>, std::vector<Situation>> checkPossible(const std::vector<Situation> &situations)
-{
-    const std::size_t ITERATIONS = 5000;
-
-    std::vector<Situation> possible;
-    std::vector<Situation> impossible = situations;
-
+    PathDebug debug;
     RNG rng;
-    for (std::size_t i = 0;i<ITERATIONS;i++) {
-        for (auto & a : impossible) {
-            a.world.collectObstacles();
-            a.world.collectMovingObstacles();
-        }
-        auto result = evaluateSample(rng, impossible, randomSample(rng, GENERAL_MAX_SPEED, 10));
-        std::vector<Situation> nextImpossible;
-        for (std::size_t j = 0;j<result.size();j++) {
-            if (result[j] < std::numeric_limits<float>::max()) {
-                possible.push_back(impossible[j]);
-            } else {
-                nextImpossible.push_back(impossible[j]);
-            }
-        }
-        impossible = nextImpossible;
+
+    const int MAX_ROBOTS = 21;
+    std::vector<WorldInformation> worlds{MAX_ROBOTS, WorldInformation{}};
+    std::vector<CachingSampler> samplers;
+    for (int i = 0;i<MAX_ROBOTS;i++) {
+        samplers.emplace_back(&rng, worlds[i], debug, cache);
+        samplers.back().copyPrecomputation(testSampler);
     }
 
-    return {possible, impossible};
+    float score = 0;
+    int counter = 0;
+    for (auto &sit : situations) {
+        rng.seed(counter + 1);
+
+        auto &sampler = samplers.at(sit.world.robotId());
+        auto &world = worlds.at(sit.world.robotId());
+        world = sit.world;
+        world.collectObstacles();
+        sampler.setSituationCounter(counter);
+        if (sampler.compute(sit.input)) {
+            // TODO: use a better metric here
+            score += sampler.getScore();
+        } else {
+            const float failureScore = FAILURE_SCORE_FACTOR * sit.input.target.pos.distance(sit.input.start.pos);
+            score += failureScore;
+        }
+        counter++;
+    }
+    return score / situations.size();
 }
 
-static void saveResult(const std::vector<PrecomputationSegmentInfo> &segments, const QString &outFilename)
+static void optimizeGeneric(const std::vector<Situation> &situations, const QString &outFilename)
 {
-    pathfinding::StandardSamplerPrecomputation data;
-    for (const auto &point : segments) {
-        point.serialize(data.add_segments());
+    const int ITERATIONS_PER_SAMPLE = 200;
+    const int TOTAL_RANDOM_PERCENTAGE = 10;
+
+    std::vector<TrajectoryInput> allInputs{situations.size()};
+    std::transform(situations.begin(), situations.end(), allInputs.begin(), [](auto &sit) { return sit.input; });
+
+    WorldInformation world;
+    PathDebug debug;
+    RNG rng{1};
+    PrecomputedStandardSampler sampler{&rng, world, debug};
+    sampler.resetSamples();
+
+    int numSamples = sampler.numSamples();
+    for (int i = 0;i<numSamples;i++) {
+        sampler.randomizeSample(i);
     }
 
-    ProtobufFileSaver fileSaver(outFilename, "KHONSU PRECOMPUTATION");
-    fileSaver.saveMessage(data);
+    SamplerCache cache{situations.size()};
+    float currentScore = samplerScore(situations, sampler, cache);
+    int betterCounter = 0;
+    for (std::size_t i = 0;;i++) {
+
+        if ((i + 1) % (ITERATIONS_PER_SAMPLE * numSamples) == 0) {
+            const bool hasSplit = sampler.trySplit(allInputs);
+            numSamples = sampler.numSamples();
+            if (hasSplit) {
+                std::cout <<"Split into "<<numSamples<<" samples!"<<std::endl;
+            }
+        }
+
+        PrecomputedStandardSampler testSampler{sampler};
+        const int modifyId = i % numSamples;
+        if (rng.uniformInt() % 100 < TOTAL_RANDOM_PERCENTAGE) {
+            testSampler.randomizeSample(modifyId);
+        } else {
+            testSampler.modifySample(modifyId);
+        }
+
+        const float score = samplerScore(situations, testSampler, cache);
+        if (score < currentScore) {
+            currentScore = score;
+            sampler.copyPrecomputation(testSampler);
+            sampler.save(outFilename);
+            if (betterCounter++ % 16 == 0) {
+                std::cout <<"Found better: "<<score<<" at iteration: "<<i<<std::endl;
+            }
+        }
+    }
 }
 
 void optimizeStandardSamplerPoints(const std::vector<Situation> &situations, const QString &outFilename)
 {
-    auto seperated = checkPossible(situations);
-    auto segmentedSituations = segmentSituations(seperated.first);
+    std::cout <<"Score of current precomputation:"<<std::endl;
+    showTotalScore(situations);
 
-    RNG rng;
-
-    std::size_t i = 0;
-    std::vector<PrecomputationSegmentInfo> result;
-    for (auto &sc : segmentedSituations) {
-
-        // collect obstacles, do this as late as possible to avoid changes to the memory where obstacles are stored (due to copying situations)
-        for (auto &s : sc) {
-            s.world.collectObstacles();
-            s.world.collectMovingObstacles();
-        }
-
-        float minDist = float(i) * MAX_DISTANCE / SCENARIO_SEGMENTS;
-        float maxDist = float(i+1) * MAX_DISTANCE / SCENARIO_SEGMENTS;
-        std::cout <<"Compute segment "<<minDist<<" -> "<<maxDist<<", size "<<sc.size()<<std::endl;
-        auto points = optimize(rng, sc, maxDist);
-
-        PrecomputationSegmentInfo segmentResult;
-        segmentResult.minDistance = minDist;
-        segmentResult.maxDistance = i == SCENARIO_SEGMENTS-1 ? std::numeric_limits<float>::max() : maxDist;
-        segmentResult.precomputedPoints = points;
-        result.push_back(segmentResult);
-
-        i++;
-    }
-
-    saveResult(result, outFilename);
+    optimizeGeneric(situations, outFilename);
 }

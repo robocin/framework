@@ -44,16 +44,18 @@ public:
 
 signals:
     void sendCommand(const Command &command);
-    void useDarkModeColors(bool useDark);
     void useNumKeysForReferee(bool forReferee); // simulator speed otherwise
     void setRobotDoubleClickAction(FieldWidgetAction action, QString searchString);
     void setRobotCtrlClickAction(FieldWidgetAction action, QString searchString);
+	void setPalette(QPalette palette);
+    void setScrollSensitivity(float sensitivity);
 
 public slots:
     void load();
 
 private slots:
     void clicked(QAbstractButton *button);
+    void changedPalette(int newIndex);
 
 private:
     void sendConfiguration();
@@ -63,6 +65,7 @@ private:
 
     Ui::ConfigDialog *ui;
     QString m_defaultVersionString;
+    QPalette m_defaultPalette;
 };
 
 #endif // CONFIGDIALOG_H

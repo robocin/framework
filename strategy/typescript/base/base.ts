@@ -32,7 +32,7 @@
 **************************************************************************/
 
 // the order of imports is important here, so proper grouping is impossible
-// tslint:disable
+/* eslint-disable import/order */
 
 import "base/error";
 
@@ -63,7 +63,7 @@ amunModule._hideFunctions();
 
 // declare the always present 'require' function
 declare global {
-	function require(module: string, cleanRequire?: boolean, overlays?: {[name: string]: any}): any;
-	function require(module: string[], cleanRequire?: boolean, overlays?: {[name: string]: any}): any[];
+	function require(module: string, cleanRequire?: boolean, overlays?: { [name: string]: any }): any;
+	function require(module: string[], cleanRequire?: boolean, overlays?: { [name: string]: any }): any[];
 }
 

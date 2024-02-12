@@ -25,20 +25,22 @@
 #include "compilerregistry.h"
 #include "scriptstate.h"
 
+
 AbstractStrategyScript::AbstractStrategyScript(const Timer *timer, StrategyType type, ScriptState& scriptState, CompilerRegistry* registry) :
     m_scriptState(scriptState),
     m_timer(timer),
     m_type(type),
     m_hasDebugger(false),
     m_compilerRegistry(registry)
-{ }
+{
+}
 
 AbstractStrategyScript::~AbstractStrategyScript()
 {
     m_gameControllerConnection->closeConnection();
 }
 
-void AbstractStrategyScript::setGameControllerConnection(std::shared_ptr<GameControllerConnection> &connection)
+void AbstractStrategyScript::setGameControllerConnection(std::shared_ptr<StrategyGameControllerMediator> &connection)
 {
     m_gameControllerConnection = connection;
 }
@@ -148,6 +150,10 @@ void AbstractStrategyScript::loadScript(const QString &filename, const QString &
 
     m_geometry.CopyFrom(geometry);
     m_team.CopyFrom(team);
+
+    auto dir = QFileInfo(m_filename).dir();
+    dir.cdUp();
+    emit recordGitDiff(dir.canonicalPath(), false);
 
     if (loadUnderlying) {
         loadScript(filename, entryPoint);

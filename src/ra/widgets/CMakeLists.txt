@@ -18,7 +18,7 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-add_library(widgets
+add_library(widgets STATIC
     include/widgets/debuggerconsole.h
     include/widgets/debugwidget.h
     include/widgets/fieldwidget.h
@@ -87,6 +87,10 @@ if (TARGET Qt5::Svg)
     target_link_libraries(widgets
         PRIVATE Qt5::Svg
     )
+endif()
+
+if(${EASY_MODE})
+	target_compile_definitions(widgets PRIVATE EASY_MODE)
 endif()
 
 add_library(ra::widgets ALIAS widgets)

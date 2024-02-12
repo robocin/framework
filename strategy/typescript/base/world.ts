@@ -24,10 +24,12 @@
 *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 **************************************************************************/
 
+/* eslint-disable @typescript-eslint/naming-convention */
+
 let amunLocal = amun;
 import { Ball as BallClass } from "base/ball";
-import * as Constants from "base/constants";
 import { Coordinates } from "base/coordinates";
+import * as debug from "base/debug";
 import * as MathUtil from "base/mathutil";
 // let mixedTeam = require "base/mixedteam"
 import * as pb from "base/protobuf";
@@ -48,7 +50,7 @@ export let FriendlyRobots: FriendlyRobot[] = [];
 /** Own robots which currently aren't tracked */
 export let FriendlyInvisibleRobots: FriendlyRobot[] = [];
 /** List of own robots with robot id as index */
-export let FriendlyRobotsById: {[index: number]: FriendlyRobot} = {};
+export let FriendlyRobotsById: { [index: number]: FriendlyRobot } = {};
 /** List of all own robots in an arbitary order */
 export let FriendlyRobotsAll: FriendlyRobot[] = [];
 /** Own keeper if on field or nil */
@@ -56,15 +58,13 @@ export let FriendlyKeeper: FriendlyRobot | undefined;
 /** List of opponent robots in an arbitary order */
 export let OpponentRobots: Robot[] = [];
 /** List of opponent robots with robot id as index */
-export let OpponentRobotsById: {[index: number]: Robot} = {};
+export let OpponentRobotsById: { [index: number]: Robot } = {};
 /** Opponent keeper if on field or nil */
 export let OpponentKeeper: Robot | undefined;
 /** Every visible robot in an arbitary order */
 export let Robots: Robot[] = [];
 /** True if we are the blue team, otherwise we're yellow */
 export let TeamIsBlue: boolean = false;
-/** True if the world is simulated */
-export let WorldStateSource: pb.world.WorldSource = pb.world.WorldSource.REAL_LIFE;
 /** True if playing on the large field */
 export let IsLargeField: boolean = false;
 /** True if the current strategy run is a replay run */
@@ -76,6 +76,36 @@ export let IsReplay: boolean = false;
  */
 export let MixedTeam: pb.ssl.TeamPlan | undefined = undefined;
 export let SelectedOptions = undefined;
+
+/** True if the world is simulated */
+let _WorldStateSource: pb.world.WorldSource | undefined = undefined;
+export function WorldStateSource(): pb.world.WorldSource {
+	if (_WorldStateSource === undefined) {
+		throw new Error("WorldStateSource can not be accessed at load-time");
+	}
+	return _WorldStateSource;
+}
+
+export interface BallModelType {
+	/**
+	 * acceleration which brakes the ball [m/s^2]
+	 * measured by looking at the ball speed graph in the plotter
+	 */
+	BallDeceleration: number;
+
+	/** accerlation which brakes the ball until it is rolling [m/s^2] */
+	FastBallDeceleration: number;
+
+	/** if ball is slower than switchRatio * shootSpeed then switch from fast to normal ball deceleration */
+	BallSwitchRatio: number;
+
+	/** vertical speed damping coeffient for a ball hitting the ground */
+	FloorDampingZ: number;
+
+	/** Speed damping coefficient for the ground velocity during volley shots */
+	FloorDampingXY: number;
+}
+export let BallModel: BallModelType = <BallModelType> {};
 
 export let TeamName: string = "";
 export let OpponentTeamName: string = "";
@@ -226,7 +256,7 @@ export function update() {
 
 /** Creates generation specific robot object for own team */
 export function _updateTeam(state: pb.robot.Team) {
-	let friendlyRobotsById: {[index: number]: FriendlyRobot} = {};
+	let friendlyRobotsById: { [index: number]: FriendlyRobot } = {};
 	let friendlyRobotsAll: FriendlyRobot[] = [];
 	for (let rdata of state.robot || []) {
 		let robot = new FriendlyRobot(rdata); // No generation types for now
@@ -255,6 +285,23 @@ function updateDivision(geom: pb.world.Geometry) {
 	}
 }
 
+let hasRaBallModel: boolean = false;
+export function switchBallModelConstants(isSimulated: boolean) {
+	// WARNING: these are only kept for compatibility reasons and replays
+	// DO NOT EVER MODIFY these values, they can be updated in the Ra UI
+	if (isSimulated) {
+		BallModel.BallDeceleration = -0.35;
+		BallModel.FastBallDeceleration = -4.5;
+		BallModel.BallSwitchRatio = 0.69;
+	} else {
+		BallModel.BallDeceleration = -0.343;
+		BallModel.FastBallDeceleration = -3.73375;
+		BallModel.BallSwitchRatio = 0.7;
+	}
+	BallModel.FloorDampingZ = 0.55;
+	BallModel.FloorDampingXY = 1;
+}
+
 // Setup field geometry
 function _updateGeometry(geom: pb.world.Geometry) {
 	let wgeom = <GeometryType> Geometry;
@@ -281,23 +328,34 @@ function _updateGeometry(geom: pb.world.Geometry) {
 	wgeom.DefenseHeight = geom.defense_height != undefined ? geom.defense_height : geom.defense_radius;
 	wgeom.DefenseWidthHalf = (geom.defense_width != undefined ? geom.defense_width : geom.defense_stretch) / 2;
 
-	wgeom.FriendlyPenaltySpot = new Vector(0, - wgeom.FieldHeightHalf + geom.penalty_spot_from_field_line_dist);
+	wgeom.FriendlyPenaltySpot = new Vector(0, -wgeom.FieldHeightHalf + geom.penalty_spot_from_field_line_dist);
 	wgeom.OpponentPenaltySpot = new Vector(0, wgeom.FieldHeightHalf - geom.penalty_spot_from_field_line_dist);
 	wgeom.PenaltyLine = wgeom.OpponentPenaltySpot.y - geom.penalty_line_from_spot_dist;
 	wgeom.OwnPenaltyLine = wgeom.FriendlyPenaltySpot.y + geom.penalty_line_from_spot_dist;
 
 	// The goal posts are on the field lines
-	wgeom.FriendlyGoal = new Vector(0, - wgeom.FieldHeightHalf);
-	wgeom.FriendlyGoalLeft = new Vector(- wgeom.GoalWidth / 2, wgeom.FriendlyGoal.y);
+	wgeom.FriendlyGoal = new Vector(0, -wgeom.FieldHeightHalf);
+	wgeom.FriendlyGoalLeft = new Vector(-wgeom.GoalWidth / 2, wgeom.FriendlyGoal.y);
 	wgeom.FriendlyGoalRight = new Vector(wgeom.GoalWidth / 2, wgeom.FriendlyGoal.y);
 
 	wgeom.OpponentGoal = new Vector(0, wgeom.FieldHeightHalf);
-	wgeom.OpponentGoalLeft = new Vector(- wgeom.GoalWidth / 2, wgeom.OpponentGoal.y);
+	wgeom.OpponentGoalLeft = new Vector(-wgeom.GoalWidth / 2, wgeom.OpponentGoal.y);
 	wgeom.OpponentGoalRight = new Vector(wgeom.GoalWidth / 2, wgeom.OpponentGoal.y);
 
 	wgeom.BoundaryWidth = geom.boundary_width;
 
 	IsLargeField = wgeom.FieldWidth > 5 && wgeom.FieldHeight > 7;
+
+	hasRaBallModel = geom.ball_model != undefined;
+	if (geom.ball_model != undefined) {
+		BallModel.BallDeceleration = -geom.ball_model.slow_deceleration!;
+		BallModel.FastBallDeceleration = -geom.ball_model.fast_deceleration!;
+		BallModel.BallSwitchRatio = geom.ball_model.switch_ratio!;
+		BallModel.FloorDampingXY = geom.ball_model.xy_damping!;
+		BallModel.FloorDampingZ = geom.ball_model.z_damping!;
+	} else {
+		switchBallModelConstants(false);
+	}
 }
 
 export function _updateWorld(state: pb.world.State) {
@@ -315,16 +373,16 @@ export function _updateWorld(state: pb.world.State) {
 	if (Time <= 0) {
 		throw new Error("Invalid Time. Outdated ra version!");
 	}
-	const prevWorldSource = WorldStateSource;
+	const prevWorldSource = _WorldStateSource;
 	if (state.world_source != undefined) {
-		if (state.world_source !== WorldStateSource) {
-			WorldStateSource = state.world_source;
+		if (state.world_source !== _WorldStateSource) {
+			_WorldStateSource = state.world_source;
 		}
 	} else if (state.is_simulated != undefined) {
-		WorldStateSource = state.is_simulated ? pb.world.WorldSource.INTERNAL_SIMULATION : pb.world.WorldSource.REAL_LIFE;
+		_WorldStateSource = state.is_simulated ? pb.world.WorldSource.INTERNAL_SIMULATION : pb.world.WorldSource.REAL_LIFE;
 	}
-	if (WorldStateSource !== prevWorldSource) {
-		Constants.switchSimulatorConstants(WorldStateSource !== pb.world.WorldSource.REAL_LIFE);
+	if (_WorldStateSource !== prevWorldSource && !hasRaBallModel) {
+		switchBallModelConstants(_WorldStateSource !== pb.world.WorldSource.REAL_LIFE);
 	}
 
 	let radioResponses: pb.robot.RadioResponse[] = state.radio_response || [];
@@ -335,7 +393,7 @@ export function _updateWorld(state: pb.world.State) {
 	let dataFriendly = TeamIsBlue ? state.blue : state.yellow;
 	if (dataFriendly) {
 		// sort data by robot id
-		let dataById: {[id: number]: pb.world.Robot} = {};
+		let dataById: { [id: number]: pb.world.Robot } = {};
 		for (let rdata of dataFriendly) {
 			dataById[rdata.id] = rdata;
 		}
@@ -349,7 +407,7 @@ export function _updateWorld(state: pb.world.State) {
 			let robotResponses: pb.robot.RadioResponse[] = [];
 			for (let response of radioResponses) {
 				if (response.generation === robot.generation
-						&&  response.id === robot.id) {
+						&& response.id === robot.id) {
 					robotResponses.push(response);
 				}
 			}
@@ -392,13 +450,9 @@ export function _updateWorld(state: pb.world.State) {
 	Robots = FriendlyRobots.slice();
 	Robots = Robots.concat(OpponentRobots);
 
-	// convert mixed team info
-	if (state.mixed_team_info && state.mixed_team_info.plans) {
-		// MixedTeam = mixedTeam.decodeData(state.mixed_team_info.plans);
-		MixedTeam = undefined;
-	} else {
-		MixedTeam = undefined;
-	}
+	// mixed team has never been fully ported or at least used since we moved to TypeScript,
+	// so it is always set to undefined
+	MixedTeam = undefined;
 
 	// update aoi data
 	AoI = state.tracking_aoi;
@@ -407,7 +461,7 @@ export function _updateWorld(state: pb.world.State) {
 	return state.has_vision_data !== false;
 }
 
-let gameStageMapping: {[name: string]: string} = {
+let gameStageMapping: { [name: string]: string } = {
 	NORMAL_FIRST_HALF_PRE: "FirstHalfPre",
 	NORMAL_FIRST_HALF: "FirstHalf",
 	NORMAL_HALF_TIME: "HalfTime",
@@ -472,6 +526,7 @@ function _updateGameState(state: pb.amun.GameState) {
 		friendlyKeeper = undefined;
 	}
 
+	debug.set("opponent keeper ID", opponentKeeperId);
 	let opponentKeeper: Robot | undefined = OpponentRobotsById[opponentKeeperId];
 	if (opponentKeeper && !opponentKeeper.isVisible) {
 		opponentKeeper = undefined;
@@ -481,26 +536,26 @@ function _updateGameState(state: pb.amun.GameState) {
 	OpponentKeeper = opponentKeeper;
 
 
-// 	optional sint32 stage_time_left = 2;
-// 	message TeamInfo {
-// 		// The team's name (empty string if operator has not typed anything).
-// 		required string name = 1;
-// 		// The number of goals scored by the team during normal play and overtime.
-// 		required uint32 score = 2;
-// 		// The number of red cards issued to the team since the beginning of the game.
-// 		required uint32 red_cards = 3;
-// 		// The amount of time (in microseconds) left on each yellow card issued to the team.
-// 		// If no yellow cards are issued, this array has no elements.
-// 		// Otherwise, times are ordered from smallest to largest.
-// 		repeated uint32 yellow_card_times = 4 [packed=true];
-// 		// The total number of yellow cards ever issued to the team.
-// 		required uint32 yellow_cards = 5;
-// 		// The number of timeouts this team can still call.
-// 		// If in a timeout right now, that timeout is excluded.
-// 		required uint32 timeouts = 6;
-// 		// The number of microseconds of timeout this team can use.
-// 		required uint32 timeout_time = 7;
-// 	}
+	// 	optional sint32 stage_time_left = 2;
+	// 	message TeamInfo {
+	// 		// The team's name (empty string if operator has not typed anything).
+	// 		required string name = 1;
+	// 		// The number of goals scored by the team during normal play and overtime.
+	// 		required uint32 score = 2;
+	// 		// The number of red cards issued to the team since the beginning of the game.
+	// 		required uint32 red_cards = 3;
+	// 		// The amount of time (in microseconds) left on each yellow card issued to the team.
+	// 		// If no yellow cards are issued, this array has no elements.
+	// 		// Otherwise, times are ordered from smallest to largest.
+	// 		repeated uint32 yellow_card_times = 4 [packed=true];
+	// 		// The total number of yellow cards ever issued to the team.
+	// 		required uint32 yellow_cards = 5;
+	// 		// The number of timeouts this team can still call.
+	// 		// If in a timeout right now, that timeout is excluded.
+	// 		required uint32 timeouts = 6;
+	// 		// The number of microseconds of timeout this team can use.
+	// 		required uint32 timeout_time = 7;
+	// 	}
 
 	FriendlyYellowCards = [];
 	if (friendlyTeamInfo.yellow_card_times != undefined) {
@@ -556,14 +611,14 @@ export function _updateUserInput(input: pb.amun.UserInput) {
 		// cache the movecommands for 0.3 seconds if it not there every frame
 		for (let robot of FriendlyRobotsAll) {
 			// < 0 for going back in logfiles while replaying
-			if (robot.moveCommand && (Time - robot.moveCommand.time > 0.3  ||
+			if (robot.moveCommand && (Time - robot.moveCommand.time > 0.3 ||
 					Time - robot.moveCommand.time < 0)) {
 				robot.moveCommand = undefined;
 			}
 		}
 		for (let cmd of input.move_command) {
 			if (FriendlyRobotsById[cmd.id]) {
-				FriendlyRobotsById[cmd.id].moveCommand = {time: Time, pos: Coordinates.toGlobal(new Vector(cmd.p_x || 0, cmd.p_y || 0))};
+				FriendlyRobotsById[cmd.id].moveCommand = { time: Time, pos: Coordinates.toGlobal(new Vector(cmd.p_x || 0, cmd.p_y || 0)) };
 			} else {
 				let teamColorString = TeamIsBlue ? "blue" : "yellow";
 				amunLocal.log(`<font color="red">WARNING: </font>please select robot ${cmd.id} for team ${teamColorString} for pulling it`);

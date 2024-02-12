@@ -22,16 +22,18 @@ include(ExternalProject)
 include(ExternalProjectHelper)
 
 ExternalProject_Add(project_eigen
-    URL http://www.robotics-erlangen.de/downloads/libraries/eigen-3.3.7-323c052e1731.tar.bz2
-    URL_HASH SHA256=9f13cf90dedbe3e52a19f43000d71fdf72e986beb9a5436dddcd61ff9d77a3ce
+    URL https://downloads.robotics-erlangen.de/eigen-3.4.0.tar.bz2
+    URL_HASH SHA256=b4c198460eba6f28d34894e3a5710998818515104d6e74e5cc331ce31e46e626
     DOWNLOAD_NO_PROGRESS true
     BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/project_eigen-prefix/build"
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+        -DCMAKE_TOOLCHAIN_FILE:PATH=${CMAKE_TOOLCHAIN_FILE}
         -DCMAKE_C_COMPILER:PATH=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER:PATH=${CMAKE_CXX_COMPILER}
         -DCMAKE_MAKE_PROGRAM:PATH=${CMAKE_MAKE_PROGRAM}
         -DCMAKE_INSTALL_MESSAGE:STRING=NEVER
+    DOWNLOAD_DIR ${DEPENDENCY_DOWNLOADS}
 )
 EPHelper_Add_Cleanup(project_eigen bin include lib share)
 EPHelper_Add_Clobber(project_eigen ${CMAKE_CURRENT_LIST_DIR}/stub.patch)

@@ -23,6 +23,7 @@
 
 #include "trajectorysampler.h"
 #include "escapeobstaclesampler.h"
+#include "speedprofile.h"
 
 #include <vector>
 
@@ -33,8 +34,8 @@ class MultiEscapeSampler : public TrajectorySampler
 public:
     MultiEscapeSampler(RNG *rng, const WorldInformation &world, PathDebug &debug);
 
-    bool compute(const TrajectoryInput &input) override;
-    const std::vector<TrajectoryGenerationInfo> &getResult() const override;
+    bool compute(const TrajectoryInput &input) final override;
+    const std::vector<Trajectory> &getResult() const final override;
     int getMaxIntersectingObstaclePrio() const;
     void resetMaxIntersectingObstaclePrio();
 

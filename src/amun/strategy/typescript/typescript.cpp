@@ -139,9 +139,10 @@ void Typescript::createGlobalScope()
     registerPathJsCallbacks(m_isolate, global, this);
     // create an empty global variable used for debugging
     Local<String> objectName = v8string(m_isolate, "___globalpleasedontuseinregularcode");
-    global->Set(objectName, Object::New(m_isolate));
+    global->Set(context, objectName, Object::New(m_isolate)).Check();
     m_context.Reset(m_isolate, context);
 
+    m_inspectorHolder.reset();
     m_inspectorHolder.reset(new InspectorHolder(m_isolate, m_context));
     m_checkForScriptTimeout->setTimeoutCallback(scriptTimeoutCallback, m_inspectorHolder.get());
     m_internalDebugger.reset(new InternalDebugger(m_isolate, this));
@@ -158,6 +159,7 @@ bool Typescript::canHandle(const QString &filename)
 void Typescript::setInspectorHandler(AbstractInspectorHandler *handler)
 {
     if (m_inspectorHolder->hasInspectorHandler()) {
+        m_inspectorHolder.reset();
         m_inspectorHolder.reset(new InspectorHolder(m_isolate, m_context));
         m_checkForScriptTimeout->setTimeoutCallback(scriptTimeoutCallback, m_inspectorHolder.get());
     }
@@ -166,6 +168,7 @@ void Typescript::setInspectorHandler(AbstractInspectorHandler *handler)
 
 void Typescript::removeInspectorHandler()
 {
+    m_inspectorHolder.reset();
     m_inspectorHolder.reset(new InspectorHolder(m_isolate, m_context));
     m_checkForScriptTimeout->setTimeoutCallback(scriptTimeoutCallback, m_inspectorHolder.get());
     m_internalDebugger.reset(new InternalDebugger(m_isolate, this));
@@ -187,7 +190,8 @@ bool Typescript::canConnectInternalDebugger() const
 static MaybeLocal<Value> callFunction(const Local<Context>& c, QString& errorMsg, Local<Object>& object, const char* funName, Isolate* isolate, std::vector<Local<Value>>&& parameters = {})
 {
     Local<String> funNameString = v8string(isolate, funName);
-    Local<Function> fun(Local<Function>::Cast(object->Get(funNameString)));
+    Local<Value> functionValue = object->Get(c, funNameString).ToLocalChecked();
+    Local<Function> fun = Local<Function>::Cast(functionValue);
     MaybeLocal<Value> maybeResult = fun->Call(c, object, parameters.size(), parameters.data());
     if (maybeResult.IsEmpty()) {
         errorMsg = errorMsg + "Calling " + funName + " did not result in a castable result! <br>";
@@ -235,7 +239,8 @@ QString Typescript::resolveJsToTs(QString fileQString, uint32_t lineUint, uint32
         if (tsSourcemap.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QByteArray arr(tsSourcemap.readAll());
             SourceMap::RevisionThree sourceMap = SourceMap::RevisionThree::fromJson(arr);
-            QString tsFileName = absJSDir.canonicalPath() + "/" + *(sourceMap.sources().begin()); // assume that there is only one sourceFile for any js file
+            const QStringList sources = sourceMap.sources();
+            QString tsFileName = absJSDir.canonicalPath() + "/" + sources.first(); // assume that there is only one sourceFile for any js file
             SourceMap::Position jsPos(lineUint, columnUint);
             auto decodedMapping = sourceMap.decodedMappings<SourceMap::Data<SourceMap::Extension::Interpolation>>();
             SourceMap::Mapping<SourceMap::Extension::Interpolation> mapping(decodedMapping);
@@ -261,9 +266,11 @@ void Typescript::evaluateStackFrame(const Local<Context>& c, QString& errorMsg, 
     MaybeLocal<Value> funName = callFunction(c, errorMsg, callSite, "getFunctionName", m_isolate);
     String::Utf8Value funString(m_isolate, funName.ToLocalChecked());
     QString funQString(*funString);
-    if (!callFunction(c, errorMsg, callSite, "isConstructor", m_isolate).ToLocalChecked()->ToBoolean()->Value()) {
+    if (!callFunction(c, errorMsg, callSite, "isConstructor", m_isolate)
+            .ToLocalChecked()
+            ->BooleanValue(m_isolate)) {
         MaybeLocal<Value> toplevelOpt = callFunction(c, errorMsg, callSite, "isToplevel", m_isolate);
-        if (!toplevelOpt.ToLocalChecked()->ToBoolean()->Value()) {
+        if (!toplevelOpt.ToLocalChecked()->BooleanValue(m_isolate)) {
             //Find Typename
             MaybeLocal<Value> typeName = callFunction(c, errorMsg, callSite, "getTypeName", m_isolate);
             String::Utf8Value nameString(m_isolate, typeName.ToLocalChecked());
@@ -285,7 +292,7 @@ void Typescript::evaluateStackFrame(const Local<Context>& c, QString& errorMsg, 
     }
 
     MaybeLocal<Value> isEval = callFunction(c, errorMsg, callSite, "isEval", m_isolate);
-    if (isEval.ToLocalChecked()->ToBoolean()->Value()) {
+    if (isEval.ToLocalChecked()->BooleanValue(m_isolate)) {
         MaybeLocal<Value> evalOrig = callFunction(c, errorMsg, callSite, "getEvalOrigin", m_isolate);
         String::Utf8Value evalOrigString(m_isolate, evalOrig.ToLocalChecked());
         errorMsg = errorMsg + " (" + QString(*evalOrigString) + ")<br>";
@@ -294,9 +301,9 @@ void Typescript::evaluateStackFrame(const Local<Context>& c, QString& errorMsg, 
     // No eval
     MaybeLocal<Value> fileName = callFunction(c, errorMsg, callSite, "getFileName", m_isolate);
     MaybeLocal<Value> lineNumber = callFunction(c, errorMsg, callSite, "getLineNumber", m_isolate);
-    uint32_t lineUint = lineNumber.ToLocalChecked()->Uint32Value();
+    uint32_t lineUint = lineNumber.ToLocalChecked()->Uint32Value(c).ToChecked();
     MaybeLocal<Value> columnNumber = callFunction(c, errorMsg, callSite, "getColumnNumber", m_isolate);
-    uint32_t columnUint = columnNumber.ToLocalChecked()->Uint32Value();
+    uint32_t columnUint = columnNumber.ToLocalChecked()->Uint32Value(c).ToChecked();
     String::Utf8Value fileString(m_isolate, fileName.ToLocalChecked());
     QString fileQString(*fileString);
 
@@ -306,6 +313,11 @@ void Typescript::evaluateStackFrame(const Local<Context>& c, QString& errorMsg, 
 void Typescript::handleDebug(const amun::DebugValue &debug)
 {
     addDebug()->CopyFrom(debug);
+}
+
+void Typescript::handleLog(const QString &text)
+{
+    log(text);
 }
 
 void Typescript::handleVisualization(const amun::Visualization &vis)
@@ -339,7 +351,7 @@ bool Typescript::buildStackTrace(const Local<Context>& context, QString& errorMs
             if (stackTrace->IsArray()) {
                 Local<Array> stackArray = Local<Array>::Cast(stackTrace);
                 for (uint32_t i = 0; i < stackArray->Length(); ++i) {
-                    Local<Object> callSite = stackArray->Get(i)->ToObject();
+                    Local<Object> callSite = stackArray->Get(context, i).ToLocalChecked().As<Object>();
                     evaluateStackFrame(context, errorMsg, callSite);
                 }
                 errorMsg += "</font>";
@@ -506,20 +518,20 @@ bool Typescript::loadJavascript(const QString &filename, const QString &entryPoi
     Local<Object> resultObject = result->ToObject(context).ToLocalChecked();
     Local<String> nameString = v8string(m_isolate, "name");
     Local<String> entrypointsString = v8string(m_isolate, "entrypoints");
-    if (!resultObject->Has(nameString) || !resultObject->Has(entrypointsString)) {
+    if (!resultObject->Has(context, nameString).ToChecked() || !resultObject->Has(context, entrypointsString).ToChecked()) {
         m_errorMsg = "<font color=\"red\">scriptInfo export must be an object containing 'name' and 'entrypoints'!</font>";
         return false;
     }
 
-    Local<Value> maybeName = resultObject->Get(nameString);
+    Local<Value> maybeName = resultObject->Get(context, nameString).ToLocalChecked();
     if (!maybeName->IsString()) {
         m_errorMsg = "<font color=\"red\">Script name must be a string!</font>";
         return false;
     }
     Local<String> name = maybeName->ToString(context).ToLocalChecked();
-    m_name = QString(*String::Utf8Value(name));
+    m_name = QString(*String::Utf8Value(m_isolate, name));
 
-    Local<Value> maybeEntryPoints = resultObject->Get(entrypointsString);
+    Local<Value> maybeEntryPoints = resultObject->Get(context, entrypointsString).ToLocalChecked();
     if (!maybeEntryPoints->IsObject()) {
         m_errorMsg = "<font color=\"red\">Entrypoints must be an object!</font>";
         return false;
@@ -528,17 +540,17 @@ bool Typescript::loadJavascript(const QString &filename, const QString &entryPoi
     m_entryPoints.clear();
     QMap<QString, Local<Function>> entryPoints;
     Local<Object> entrypointsObject = maybeEntryPoints->ToObject(context).ToLocalChecked();
-    Local<Array> properties = entrypointsObject->GetOwnPropertyNames();
+    Local<Array> properties = entrypointsObject->GetOwnPropertyNames(context).ToLocalChecked();
     for (unsigned int i = 0;i<properties->Length();i++) {
-        Local<Value> key = properties->Get(i);
-        Local<Value> value = entrypointsObject->Get(key);
+        Local<Value> key = properties->Get(context, i).ToLocalChecked();
+        Local<Value> value = entrypointsObject->Get(context, key).ToLocalChecked();
         if (!value->IsFunction()) {
             m_errorMsg = "<font color=\"red\">Entrypoints must contain functions!</font>";
             return false;
         }
         Local<Function> function = Local<Function>::Cast(value);
 
-        QString keyString(*String::Utf8Value(key));
+        QString keyString(*String::Utf8Value(m_isolate, key));
         m_entryPoints.append(keyString);
         entryPoints[keyString] = function;
     }
@@ -552,31 +564,34 @@ bool Typescript::loadJavascript(const QString &filename, const QString &entryPoi
     Local<String> optionsWithDefaultString = v8string(m_isolate, "optionsWithDefault");
 
     m_options.clear();
-    if (resultObject->Has(optionsWithDefaultString)) {
-        if (!resultObject->Get(optionsWithDefaultString)->IsArray()) {
+    if (resultObject->Has(context, optionsWithDefaultString).ToChecked()) {
+        Local<Value> optionsValue = resultObject->Get(context, optionsWithDefaultString).ToLocalChecked();
+        if (!optionsValue->IsArray()) {
             m_errorMsg = "<font color=\"red\">options must be an array!</font>";
             return false;
         }
-        Local<Array> options = Local<Array>::Cast(resultObject->Get(optionsWithDefaultString));
+        Local<Array> options = Local<Array>::Cast(optionsValue);
         for (unsigned int i = 0;i<options->Length();i++) {
-            if (!options->Get(i)->IsArray()) {
+            Local<Value> optionValue = options->Get(context, i).ToLocalChecked();
+            if (!optionValue->IsArray()) {
                 m_errorMsg = "<font color=\"red\">options must contain arrays!</font>";
                 return false;
             }
-            Local<Array> option = Local<Array>::Cast(options->Get(i));
-            QString optionName(*String::Utf8Value(option->Get(0)));
-            bool optionDefault = Local<Boolean>::Cast(option->Get(1))->Value();
+            Local<Array> option = Local<Array>::Cast(optionValue);
+            QString optionName(*String::Utf8Value(m_isolate, option->Get(context, 0).ToLocalChecked()));
+            bool optionDefault = option->Get(context, 1).ToLocalChecked()->BooleanValue(m_isolate);
             m_options[optionName] = optionDefault;
         }
 
-    } else if (resultObject->Has(optionsString)) {
-        if (!resultObject->Get(optionsString)->IsArray()) {
+    } else if (resultObject->Has(context, optionsString).ToChecked()) {
+        Local<Value> optionsValue = resultObject->Get(context, optionsString).ToLocalChecked();
+        if (!optionsValue->IsArray()) {
             m_errorMsg = "<font color=\"red\">options must be an array!</font>";
             return false;
         }
-        Local<Array> options = Local<Array>::Cast(resultObject->Get(optionsString));
+        Local<Array> options = Local<Array>::Cast(optionsValue);
         for (unsigned int i = 0;i<options->Length();i++) {
-            QString option(*String::Utf8Value(options->Get(i)));
+            QString option(*String::Utf8Value(m_isolate, options->Get(context, i).ToLocalChecked()));
             m_options[option] = true;
         }
     }
@@ -588,6 +603,9 @@ bool Typescript::loadJavascript(const QString &filename, const QString &entryPoi
 void Typescript::onCompileStarted()
 {
     emit changeLoadState(amun::StatusStrategy::COMPILING);
+    auto dir = QFileInfo(m_filename).dir();
+    dir.cdUp();
+    emit recordGitDiff(dir.canonicalPath(), true);
 }
 
 void Typescript::onCompileWarning(const QString &message)
@@ -638,7 +656,7 @@ void Typescript::defineModule(const FunctionCallbackInfo<Value> &args)
 
 
     for (unsigned int i = 2;i<imports->Length();i++) {
-        QString name = *String::Utf8Value(imports->Get(context, i).ToLocalChecked());
+        QString name = *String::Utf8Value(isolate, imports->Get(context, i).ToLocalChecked());
         if (!t->loadModule(name)) {
             return;
         }
@@ -665,8 +683,14 @@ void Typescript::registerDefineFunction(Local<ObjectTemplate> global)
 
 ScriptOrigin *Typescript::scriptOriginFromFileName(QString name)
 {
-    ScriptOrigin *origin = new ScriptOrigin(v8string(m_isolate, name),
-                                            Local<Integer>(), Local<Integer>(), Local<Boolean>(), Integer::New(m_isolate, m_scriptIdCounter));
+    ScriptOrigin *origin = new ScriptOrigin {
+        m_isolate,
+        v8string(m_isolate, name),
+        0,
+        0,
+        false,
+        m_scriptIdCounter
+    };
     m_scriptIdCounter++;
     m_scriptOrigins.push_back(origin);
     return origin;
@@ -723,27 +747,26 @@ bool Typescript::loadModule(QString name)
 void Typescript::performRequire(const FunctionCallbackInfo<Value> &args)
 {
     Typescript *t = static_cast<Typescript*>(Local<External>::Cast(args.Data())->Value());
-    Local<Context> context = args.GetIsolate()->GetCurrentContext();
+    Isolate* isolate = args.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
 
-    bool cleanRequire = false;
-    if (args.Length() > 1) {
-        USE(args[1]->BooleanValue(context).To(&cleanRequire));
-        if (cleanRequire) {
-            t->m_requireCache.push_back({});
-        }
+    bool cleanRequire = args.Length() > 1 && args[1]->BooleanValue(isolate);
+    if (cleanRequire) {
+        t->m_requireCache.push_back({});
     }
+
     if (args.Length() > 2) {
         if (!cleanRequire || !args[2]->IsObject()) {
             throwError(t->m_isolate, "Overlays can only be used with a clean require and must be an object!");
             return;
         }
         Local<Object> overlays = args[2]->ToObject(context).ToLocalChecked();
-        Local<Array> properties = overlays->GetOwnPropertyNames();
+        Local<Array> properties = overlays->GetOwnPropertyNames(context).ToLocalChecked();
         for (unsigned int i = 0;i<properties->Length();i++) {
-            Local<Value> key = properties->Get(i);
-            Local<Value> value = overlays->Get(key);
+            Local<Value> key = properties->Get(context, i).ToLocalChecked();
+            Local<Value> value = overlays->Get(context, key).ToLocalChecked();
 
-            QString keyString(*String::Utf8Value(key));
+            QString keyString(*String::Utf8Value(isolate, key));
             t->m_requireCache.back()[keyString] = new Global<Value>(args.GetIsolate(), value);
         }
     }
@@ -754,10 +777,10 @@ void Typescript::performRequire(const FunctionCallbackInfo<Value> &args)
         Local<Array> result = Array::New(t->m_isolate);
         bool failed = false;
         for (unsigned int i = 0;i<requiredFiles->Length();i++) {
-            QString name(*String::Utf8Value(requiredFiles->Get(i)));
+            QString name(*String::Utf8Value(isolate, requiredFiles->Get(context, i).ToLocalChecked()));
             if (t->loadModule(name)) {
                 Local<Value> value = Local<Value>::New(t->m_isolate, *t->m_requireCache.back()[name]);
-                result->Set(i, value);
+                result->Set(context, i, value).Check();
             } else {
                 failed = true;
             }
@@ -766,7 +789,7 @@ void Typescript::performRequire(const FunctionCallbackInfo<Value> &args)
             args.GetReturnValue().Set(result);
         }
     } else {
-        QString name(*String::Utf8Value(args[0]));
+        QString name(*String::Utf8Value(isolate, args[0]));
         if (t->loadModule(name)) {
             args.GetReturnValue().Set(*t->m_requireCache.back()[name]);
         }

@@ -27,7 +27,7 @@
 #include <QMenu>
 #include <cmath>
 #include <QGraphicsRectItem>
-#include <QGLWidget>
+#include <QOpenGLWidget>
 #include <QSettings>
 #include <QLabel>
 #include <QFileDialog>
@@ -197,6 +197,8 @@ FieldWidget::FieldWidget(QWidget *parent) :
     QAction *actionShowAOI = m_contextMenu->addAction("Enable custom vision area");
     actionShowAOI->setCheckable(true);
     connect(actionShowAOI, SIGNAL(toggled(bool)), SLOT(setAOIVisible(bool)));
+    m_actionFollowBall = m_contextMenu->addAction("Follow ball");
+    m_actionFollowBall->setCheckable(true);
     QAction *actionCustomFieldSetup = m_contextMenu->addAction("Virtual Field");
     connect(actionCustomFieldSetup, &QAction::triggered, this, &FieldWidget::virtualFieldSetupDialog);
     m_actionAntialiasing = m_contextMenu->addAction("Anti-aliasing");
@@ -289,21 +291,29 @@ FieldWidget::FieldWidget(QWidget *parent) :
     m_scene = new QGraphicsScene(this);
     setScene(m_scene);
 
-    // ball object
-    m_ball = new QGraphicsEllipseItem;
-    m_ball->setPen(Qt::NoPen);
-    m_ball->setBrush(QColor(255, 66, 0));
-    m_ball->setZValue(100.0f);
-    m_ball->setRect(QRectF(-ballRadius, -ballRadius, ballRadius * 2.0f, ballRadius * 2.0f));
-    m_ball->hide();
-    m_scene->addItem(m_ball);
+    // ball objects
+    const QColor ballColor(255, 66, 0);
+    m_rollingBall = new QGraphicsEllipseItem;
+    m_rollingBall->setPen(Qt::NoPen);
+    m_rollingBall->setBrush(ballColor);
+    m_rollingBall->setZValue(100.0f);
+    m_rollingBall->setRect(QRectF(-ballRadius, -ballRadius, ballRadius * 2.0f, ballRadius * 2.0f));
+    m_rollingBall->hide();
+    m_scene->addItem(m_rollingBall);
+
+    m_flyingBall = new QGraphicsEllipseItem;
+    m_flyingBall->setPen(Qt::NoPen);
+    m_flyingBall->setBrush(ballColor);
+    m_flyingBall->setZValue(100.0f);
+    m_flyingBall->setRect(QRectF(-ballRadius * 4.0f, -ballRadius * 4.0f, ballRadius * 8.0f, ballRadius * 8.0f));
+    m_flyingBall->hide();
+    m_scene->addItem(m_flyingBall);
 
     // rectangle for area of interest
     m_aoiItem = createAoiItem(128);
     m_virtualFieldAoiItem = createAoiItem(80);
     m_aoi = QRectF(-1, -1, 2, 2);
 
-    QColor ballColor(255, 66, 0);
     m_ballTrace.color = ballColor.darker();
     m_ballTrace.z_index = 2.f;
     m_ballRawTrace.color =  QColor(Qt::blue);//ballColor.darker(300);
@@ -627,16 +637,26 @@ void FieldWidget::updateVisualizations()
     qDeleteAll(m_visualizationItems);
     m_visualizationItems.clear();
 
-    foreach (const Status &v, m_drawScenes[m_currentScene].visualizations) {
+    const bool yellowReplayRunning = m_actionShowYellowReplayVis->isEnabled()
+            && m_actionShowYellowReplayVis->isChecked()
+            && m_debugSourceCounter.contains(amun::DebugSource::ReplayYellow)
+            && m_debugSourceCounter[amun::DebugSource::ReplayYellow] >= 0;
+    const bool blueReplayRunning = m_actionShowBlueReplayVis->isChecked()
+            && m_actionShowBlueReplayVis->isEnabled()
+            && m_debugSourceCounter.contains(amun::DebugSource::ReplayBlue)
+            && m_debugSourceCounter[amun::DebugSource::ReplayBlue] >= 0;
+    for (const Status &v : m_drawScenes[m_currentScene].visualizations) {
         for (const auto& debug: v->debug()) {
             if (m_visibleVisSources.value(debug.source())) {
-                updateVisualizations(debug);
+                const bool grey = (debug.source() == amun::DebugSource::StrategyYellow && yellowReplayRunning)
+                    || (debug.source() == amun::DebugSource::StrategyBlue && blueReplayRunning);
+                updateVisualizations(debug, grey);
             }
         }
     }
 }
 
-void FieldWidget::updateVisualizations(const amun::DebugValues &v)
+void FieldWidget::updateVisualizations(const amun::DebugValues &v, const bool grey)
 {
     // use introspection to iterate through the visualizations
     const google::protobuf::RepeatedPtrField<amun::Visualization> &viss = v.visualization();
@@ -675,11 +695,18 @@ void FieldWidget::updateVisualizations(const amun::DebugValues &v)
                 }
             }
             if (vis.pen().has_color()) {
-                pen.setColor(QColor(
-                                 vis.pen().color().red(),
-                                 vis.pen().color().green(),
-                                 vis.pen().color().blue(),
-                                 vis.pen().color().alpha()));
+                QColor col(
+                        vis.pen().color().red(),
+                        vis.pen().color().green(),
+                        vis.pen().color().blue(),
+                        vis.pen().color().alpha());
+
+                if (grey) {
+                    int h, s, v, a;
+                    col.getHsv(&h, &s, &v, &a);
+                    col = QColor::fromHsv(h, s / 2, v, a / 4);
+                }
+                pen.setColor(col);
             }
             if (vis.has_width()) {
                 pen.setWidthF(vis.width());
@@ -690,7 +717,13 @@ void FieldWidget::updateVisualizations(const amun::DebugValues &v)
 
         // configure brush
         if (vis.has_brush()) {
-            brush = QBrush(QColor(vis.brush().red(), vis.brush().green(), vis.brush().blue(), vis.brush().alpha()));
+            QColor col(QColor(vis.brush().red(), vis.brush().green(), vis.brush().blue(), vis.brush().alpha()));
+            if (grey) {
+                int h, s, v, a;
+                col.getHsv(&h, &s, &v, &a);
+                col = QColor::fromHsv(h, s / 2, v, a / 4);
+            }
+            brush = QBrush(col);
         }
 
         if (vis.has_circle()) {
@@ -704,7 +737,42 @@ void FieldWidget::updateVisualizations(const amun::DebugValues &v)
         if (vis.has_path() && vis.path().point_size() > 1) {
             m_visualizationItems << createPath(pen, brush, vis);
         }
+
+        if (vis.has_image()) {
+            m_visualizationItems << createFieldFunction(vis);
+        }
     }
+}
+
+QGraphicsItem* FieldWidget::createFieldFunction(const amun::Visualization &vis)
+{
+    QGraphicsPixmapItem *item = new QGraphicsPixmapItem;
+
+    if (vis.image().data().size() != vis.image().width() * vis.image().height() * 4) {
+        std::cerr <<"Error: image visualization data size does not match width * height"<<std::endl;
+        return item;
+    }
+
+    QRectF drawRect = m_fieldRect;
+    if (vis.image().has_draw_area()) {
+        drawRect.setLeft(vis.image().draw_area().topleft().x());
+        drawRect.setRight(vis.image().draw_area().bottomright().x());
+        drawRect.setTop(vis.image().draw_area().topleft().y());
+        drawRect.setBottom(vis.image().draw_area().bottomright().y());
+    }
+
+    QTransform transform = QTransform::fromTranslate(drawRect.left(), drawRect.top());
+    transform.scale(drawRect.width() / vis.image().width(), drawRect.height() / vis.image().height());
+    item->setTransform(transform);
+
+    const uint8_t* data = (uint8_t*)(vis.image().data().data());
+    const QImage image(data, vis.image().width(), vis.image().height(), vis.image().width() * 4, QImage::Format_ARGB32);
+    const QPixmap p = QPixmap::fromImage(image);
+
+    item->setPixmap(p);
+    item->setZValue(vis.background() ? 1.0f : 10.0f);
+    m_scene->addItem(item);
+    return item;
 }
 
 QGraphicsItem* FieldWidget::createCircle(const QPen &pen, const QBrush &brush, const amun::Visualization &vis)
@@ -898,7 +966,8 @@ void FieldWidget::updateDetection()
                 }
                 addBallTrace(worldState.time(), worldState.ball());
             } else {
-                m_ball->hide();
+                m_rollingBall->hide();
+                m_flyingBall->hide();
             }
 
             // update the individual robots
@@ -920,9 +989,10 @@ void FieldWidget::updateDetection()
                 addRobotTrace(worldState.time(), robot, m_robotYellowTrace, m_robotYellowRawTrace);
             }
         } else {
-            m_ball->hide();
+            m_rollingBall->hide();
+            m_flyingBall->hide();
         }
-        
+
         if (m_showVision) {
             m_visionCurrentlyDisplayed = true;
             for (int i = 0; i < worldState.vision_frames_size(); ++i) {
@@ -1094,7 +1164,20 @@ void FieldWidget::hideTruth() {
 
 void FieldWidget::setBall(const world::Ball &ball)
 {
-    ::setBall(m_ball, ball.p_x(), ball.p_y());
+    QGraphicsEllipseItem *currentBall;
+    if (ball.p_z() == 0.0f) {
+        currentBall = m_rollingBall;
+        m_flyingBall->hide();
+    } else {
+        currentBall = m_flyingBall;
+        m_rollingBall->hide();
+    }
+    ::setBall(currentBall, ball.p_x(), ball.p_y());
+
+    if (m_actionFollowBall->isChecked()) {
+        ensureVisible(currentBall, 150, 150);
+        createInfoText();
+    }
 }
 
 void FieldWidget::setVisionBall(const SSL_DetectionBall &ball, uint cameraID, int ballID)
@@ -1288,11 +1371,14 @@ void FieldWidget::setTrueRobot(const world::SimRobot& robot, const robot::Specs 
         createRobotItem(r, specs, color, robot.id(), RobotVisualisation::VISION);
     }
 
-    QQuaternion q{robot.rotation().real(), robot.rotation().i(), robot.rotation().j(), robot.rotation().k()}; // see simrobot.cpp
+    QQuaternion q{robot.rotation().real(), robot.rotation().i(), robot.rotation().j(), robot.rotation().k()};
     QVector3D forwards{0, 1, 0};
     QVector3D rotated = q.rotatedVector(forwards);
-    float phi = -atan2(rotated.z(), rotated.y());
-    phi = m_virtualFieldTransform.applyAngle(phi) * 180 / M_PI + 180;
+    float phi = -atan2(rotated.x(), rotated.y());
+    phi = m_virtualFieldTransform.applyAngle(phi) * 180 / M_PI;
+    if (phi < 0) {
+        phi += 360;
+    }
 
     bool update = false;
     const QPointF pos = m_virtualFieldTransform.applyPosition({robot.p_x(), robot.p_y()});
@@ -1432,9 +1518,7 @@ void FieldWidget::setAntialiasing(bool enable)
 void FieldWidget::setOpenGL(bool enable)
 {
     if (enable) {
-        QGLFormat format;
-        format.setSampleBuffers(true);
-        setViewport(new QGLWidget(format));
+        setViewport(new QOpenGLWidget());
         setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     } else {
         setViewport(new QWidget);
@@ -1747,7 +1831,9 @@ void FieldWidget::mousePressEvent(QMouseEvent *event)
 
         if (m_dragType == DragNone) {
             m_dragType = DragBall;
-            m_dragItem = m_ball;
+            m_dragItem = m_rollingBall;
+            m_rollingBall->show();
+            m_flyingBall->hide();
         }
 
         if (m_dragType != DragMeasure) {
@@ -1851,9 +1937,9 @@ void FieldWidget::wheelEvent(QWheelEvent *event)
 
     float scaleFactor = 1;
     if (!numPixels.isNull()) {
-        scaleFactor = std::pow(1.2, numPixels.y() / 15.f);
+        scaleFactor = std::pow(1.2, m_scrollSensitivity * numPixels.y() / 15.f);
     } else if (!numDegrees.isNull()) {
-        scaleFactor = std::pow(1.2, numDegrees.y() / 15.f);
+        scaleFactor = std::pow(1.2, m_scrollSensitivity * numDegrees.y() / 15.f);
     }
 
     // transform centered on the mouse cursor
@@ -2005,7 +2091,11 @@ void FieldWidget::drawBackground(QPainter *painter, const QRectF &rect)
     // draw field lines twice
     // first with a cosmetic pen
     // and again with a two dimensional pen
-    drawLines(painter, rect1, true);
+    if (!m_isExportingScreenshot) {
+        // do not render cosmetic lines when exporting to SVG
+        // these lines create issues when inkscape processes them, making the result unusable
+        drawLines(painter, rect1, true);
+    }
     drawLines(painter, rect1, false);
 
     // penalty points
@@ -2034,7 +2124,7 @@ void FieldWidget::drawLines(QPainter *painter, QRectF rect, bool cosmetic)
     painter->setPen(pen);
 
     {
-        
+
         // defense areas
         if (geometry.type() == world::Geometry::TYPE_2014) {
             float dr = geometry.defense_radius();
@@ -2169,10 +2259,17 @@ void FieldWidget::takeScreenshot()
 
         QSvgGenerator file;
         file.setFileName(filename);
-        file.setSize(QSize(drawRect.width(), drawRect.height()));
+        const auto &geometry = m_drawScenes[m_currentScene].geometry;
+        const float scale = 100;
+        const float width = scale * geometry.field_height();
+        const float height = scale * geometry.field_width();
+        const QRectF outputRect{-width / 2, -height / 2, width, height};
+        file.setViewBox(outputRect);
         file.setTitle("Ra screenshot");
         QPainter painter(&file);
-        render(&painter, QRectF(), drawRect);
+        m_isExportingScreenshot = true;
+        render(&painter, outputRect, drawRect);
+        m_isExportingScreenshot = false;
 
         // reset cache mode of text elements
         for (auto &team : {m_robotsBlue, m_robotsYellow}) {
@@ -2213,11 +2310,11 @@ void FieldWidget::saveSituationTypescript(int trackingFromInt)
 void FieldWidget::restoreSituation()
 {
     QList<int> yellowIds;
-    for (auto robot : m_lastSimulatorState.yellow_robots()) {
+    for (const auto &robot : m_lastSimulatorState.yellow_robots()) {
         yellowIds.append(robot.id());
     }
     QList<int> blueIds;
-    for (auto robot : m_lastSimulatorState.blue_robots()) {
+    for (const auto &robot : m_lastSimulatorState.blue_robots()) {
         blueIds.append(robot.id());
     }
     emit selectRobots(yellowIds, blueIds);
@@ -2305,4 +2402,8 @@ void FieldWidget::switchScene(int scene)
         m_worldState.append(m_drawScenes[m_currentScene].lastWorldState[m_trackingFrom]);
         updateDetection();
     }
+}
+
+void FieldWidget::setScrollSensitivity(float sensitivity) {
+    m_scrollSensitivity = sensitivity;
 }

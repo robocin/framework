@@ -65,6 +65,7 @@ void Seshat::setStatusSource(std::shared_ptr<StatusSource> source)
             QCoreApplication::processEvents(QEventLoop::AllEvents | QEventLoop::WaitForMoreEvents, 50);
         }
         m_isPlayback = true;
+        m_replayLogger.handleStatus(m_logger.getTeamStatus());
     }
     emit changeStatusSource();
 }
@@ -229,7 +230,7 @@ void Seshat::openLogfile(const logfile::LogRequest& logRequest)
     const std::string& filename = logRequest.path();
     QList<std::function<QPair<std::shared_ptr<StatusSource>, QString>(QString)>> openFunctions =
         {&VisionLogLiveConverter::tryOpen, &LogFileReader::tryOpen};
-    for (auto openFunction : openFunctions) {
+    for (const auto &openFunction : openFunctions) {
         auto openResult = openFunction(QString::fromStdString(filename));
 
         if (openResult.first != nullptr) {

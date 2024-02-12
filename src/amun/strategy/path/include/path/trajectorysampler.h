@@ -23,40 +23,25 @@
 
 #include "alphatimetrajectory.h"
 #include "worldinformation.h"
+#include "speedprofile.h"
 #include "pathdebug.h"
+#include "trajectoryinput.h"
 #include "core/vector.h"
 #include <vector>
 
 class RNG;
 
-struct TrajectoryInput {
-    Vector v0, v1, distance, s0, s1;
-    float t0 = 0;
-    bool exponentialSlowDown;
-    float maxSpeed;
-    float maxSpeedSquared;
-    float acceleration;
-};
-
 class TrajectorySampler {
 public:
-
-    struct TrajectoryGenerationInfo {
-        SpeedProfile profile = SpeedProfile(0);
-        Vector desiredDistance;
-    };
-
     TrajectorySampler(RNG *rng, const WorldInformation &world, PathDebug &debug) :
         m_rng(rng),
         m_world(world),
         m_debug(debug) {}
-    TrajectorySampler(const TrajectorySampler &) = delete;
-    TrajectorySampler& operator=(const TrajectorySampler&) = delete;
 
     virtual ~TrajectorySampler() {}
     // returns true on finding a valid trajectory
     virtual bool compute(const TrajectoryInput &input) = 0;
-    virtual const std::vector<TrajectoryGenerationInfo> &getResult() const = 0;
+    virtual const std::vector<Trajectory> &getResult() const = 0;
 
 protected:
     RNG *m_rng;

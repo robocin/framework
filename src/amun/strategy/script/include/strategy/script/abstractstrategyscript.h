@@ -21,7 +21,7 @@
 #ifndef ABSTRACTSTRATEGYSCRIPT_H
 #define ABSTRACTSTRATEGYSCRIPT_H
 
-#include "gamecontroller/gamecontrollerconnection.h"
+#include "gamecontroller/strategygamecontrollermediator.h"
 #include "protobuf/command.h"
 #include "protobuf/debug.pb.h"
 #include "protobuf/gamestate.pb.h"
@@ -36,6 +36,7 @@
 #include <QStringList>
 #include <QDir>
 #include <QList>
+#include <QThread>
 
 class DebugHelper;
 class Timer;
@@ -70,8 +71,8 @@ public:
     const ScriptState& state() const { return m_scriptState; };
     ScriptState& state() { return m_scriptState; };
 
-    void setGameControllerConnection(std::shared_ptr<GameControllerConnection> &connection);
-    std::shared_ptr<GameControllerConnection> getGameControllerConnection() const { return m_gameControllerConnection; }
+    void setGameControllerConnection(std::shared_ptr<StrategyGameControllerMediator> &connection);
+    std::shared_ptr<StrategyGameControllerMediator> getGameControllerConnection() const { return m_gameControllerConnection; }
 
     // getter functions
     QString errorMsg() const { return m_errorMsg; }
@@ -121,10 +122,13 @@ signals:
     void sendMixedTeamInfo(const QByteArray &data);
     void changeLoadState(amun::StatusStrategy::STATE state);
 
+	void recordGitDiff(const QString& path, bool changed);
+
 protected:
     bool chooseEntryPoint(QString entryPoint);
     virtual void loadScript(const QString &filename, const QString &entryPoint) = 0;
     virtual bool process(double &pathPlanning) = 0;
+
 
 protected:
     QStringList m_entryPoints;
@@ -147,7 +151,7 @@ protected:
     amun::GameState m_refereeState;
     amun::UserInput m_userInput;
 
-    std::shared_ptr<GameControllerConnection> m_gameControllerConnection;
+    std::shared_ptr<StrategyGameControllerMediator> m_gameControllerConnection;
 
     CompilerRegistry* m_compilerRegistry;
 private:

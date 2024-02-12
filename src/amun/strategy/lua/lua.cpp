@@ -22,6 +22,7 @@
 #include "lua_amun.h"
 #include "lua_path.h"
 #include "lua_protobuf.h"
+#include "lua_eigen.h"
 #include "core/timer.h"
 #include "strategy/script/debughelper.h"
 #include "strategy/script/filewatcher.h"
@@ -308,6 +309,7 @@ Lua::Lua(const Timer *timer, StrategyType type, ScriptState& scriptState, bool d
     // create file system watcher
     m_watcher = new FileWatcher(this);
     connect(m_watcher, SIGNAL(fileChanged(QString)), SIGNAL(requestReload()));
+    connect(m_watcher, SIGNAL(fileChanged(QString)), SLOT(requestRecording()));
 
     // timeout hook
     lua_sethook(m_state, luaDebugHook, LUA_MASKCOUNT, 1000000);
@@ -534,8 +536,17 @@ void Lua::setupPackageLoader()
     lua_setfield(m_state, -2, "amun");
     lua_pushcfunction(m_state, pathRegister);
     lua_setfield(m_state, -2, "path");
+    lua_pushcfunction(m_state, eigenRegister);
+    lua_setfield(m_state, -2, "eigen");
     lua_pop(m_state, 1);
 
     lua_pop(m_state, 1);
     // end customize package table
+}
+
+void Lua::requestRecording()
+{
+	auto dir = QFileInfo(m_filename).dir();
+	dir.cdUp();
+	emit recordGitDiff(dir.canonicalPath(), true);
 }

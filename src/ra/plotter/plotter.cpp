@@ -314,14 +314,15 @@ void Plotter::handleStatus(const Status &status, bool backlogStatus)
 
         if (worldState.reality_size() > 0) {
             auto reality = worldState.reality(worldState.reality_size()-1);
+            float realityTime = reality.has_time() ? (reality.time() - m_startTime) * 1E-9f : time;
             if (reality.has_ball()) {
-                parseMessage(reality.ball(), QStringLiteral("Ball.truth"), time);
+                parseMessage(reality.ball(), QStringLiteral("Ball.truth"), realityTime);
             }
             for (const auto &robot : reality.yellow_robots()) {
-                parseMessage(robot, QString(QStringLiteral("Yellow.%1.truth")).arg(robot.id()), time);
+                parseMessage(robot, QString(QStringLiteral("Yellow.%1.truth")).arg(robot.id()), realityTime);
             }
             for (const auto &robot : reality.blue_robots()) {
-                parseMessage(robot, QString(QStringLiteral("Blue.%1.truth")).arg(robot.id()), time);
+                parseMessage(robot, QString(QStringLiteral("Blue.%1.truth")).arg(robot.id()), realityTime);
             }
         }
 
@@ -366,7 +367,7 @@ void Plotter::handleStatus(const Status &status, bool backlogStatus)
 
         for (int i = 0; i < worldState.radio_response_size(); i++) {
             const robot::RadioResponse &response = worldState.radio_response(i);
-            const QString name = QString(QStringLiteral("%1-%2")).arg(response.generation()).arg(response.id());
+            const QString name = QString(QStringLiteral("%1-%2-%3")).arg(response.generation()).arg(response.is_blue() ? "blue" : "yellow").arg(response.id());
             const float responseTime = (response.time() - m_startTime) * 1E-9f;
             parseMessage(response, QString(QStringLiteral("RadioResponse.%1")).arg(name), responseTime);
             parseMessage(response.estimated_speed(), QString(QStringLiteral("RadioResponse.%1.estimatedSpeed")).arg(name), responseTime);
@@ -375,7 +376,7 @@ void Plotter::handleStatus(const Status &status, bool backlogStatus)
 
     for (int i = 0; i < status->radio_command_size(); i++) {
         const robot::RadioCommand &command = status->radio_command(i);
-        const QString name = QString(QStringLiteral("%1-%2")).arg(command.generation()).arg(command.id());
+        const QString name = QString(QStringLiteral("%1-%2-%3")).arg(command.generation()).arg(command.is_blue() ? "blue" : "yellow").arg(command.id());
 
         const robot::Command &cmd = command.command();
         parseMessage(cmd, QString(QStringLiteral("RadioCommand.%1")).arg(name), time);
@@ -411,6 +412,9 @@ void Plotter::handleStatus(const Status &status, bool backlogStatus)
                 break;
             case amun::Autoref:
                 parent = "Autoref";
+                break;
+            case amun::Tracking:
+                parent = "Tracking";
                 break;
             default:
                 parent = "Unknown";

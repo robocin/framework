@@ -36,6 +36,7 @@ public:
     double uniformPositive();
     float uniformFloat(float min, float max);
     Vector uniformVector();
+    Vector uniformVectorIn(Vector min, Vector max);
     double normal(double sigma, double mean = 0.0);
     Vector normalVector(double sigma, double mean = 0.0);
 
@@ -54,6 +55,10 @@ inline double RNG::uniform()
     return uniformInt() / 4294967296.0;
 }
 
+/*!
+ * \brief Generate a random floating point number in the range [min, max]
+ * \return A random number drawn from a uniform distribution [min, max]
+ */
 inline float RNG::uniformFloat(float min, float max)
 {
     return min + (uniformInt() / 4294967296.0f) * (max - min);
@@ -68,6 +73,17 @@ inline float RNG::uniformFloat(float min, float max)
 inline Vector RNG::uniformVector()
 {
     return Vector(uniform(), uniform());
+}
+
+/*!
+ * \brief Initialize a vector with two random values drawn from a uniform distribution (x from [min.x, max.x], y from [min.y, max.y])
+ *
+ * \sa uniformVector
+ * \return A random vector drawn from a uniform distribution (x from [min.x, max.x], y from [min.y, max.y])
+ */
+inline Vector RNG::uniformVectorIn(Vector min, Vector max)
+{
+    return Vector(uniformFloat(min.x, max.x), uniformFloat(min.y, max.y));
 }
 
 /*!

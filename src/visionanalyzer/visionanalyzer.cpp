@@ -35,6 +35,9 @@
 #include "processor/referee.h"
 #include <QThread>
 #include <QDebug>
+#include <QString>
+
+static const QString SENDER_NAME_FOR_REFEREE = "VisionAnalyzer";
 
 int main(int argc, char* argv[])
 {
@@ -58,13 +61,14 @@ int main(int argc, char* argv[])
     parser.addOption(outputDirOption);
     parser.process(app);
 
-    int argCount = parser.positionalArguments().size();
+    const QStringList arguments = parser.positionalArguments();
+    int argCount = arguments.size();
     if (argCount < 1) {
         parser.showHelp(1);
         app.exit(1);
     }
 
-    VisionLogReader logFileIn(parser.positionalArguments().first());
+    VisionLogReader logFileIn(arguments.first());
     if (!logFileIn.errorMessage().isEmpty()) {
         qDebug() <<logFileIn.errorMessage();
         app.exit(-1);
@@ -90,7 +94,7 @@ int main(int argc, char* argv[])
     FeedbackStrategyReplay * strategyReplay = nullptr;
     QThread* strategyThread = nullptr;
     bool lastFlipped = false;
-    std::shared_ptr<GameControllerConnection> connection(new GameControllerConnection(false));
+    auto connection = std::make_shared<StrategyGameControllerMediator>(false);
     if (parser.isSet(autorefDirOption)) {
         strategy = new Strategy(timer, StrategyType::AUTOREF, nullptr, &compilerRegistry, connection);
 
@@ -130,7 +134,7 @@ int main(int argc, char* argv[])
                 if (msg_type == VisionLog::MessageType::MESSAGE_SSL_VISION_2014) {
                     tracker.queuePacket(visionFrame, receiveTimeNanos, "logfile");
                 } else if (msg_type == VisionLog::MessageType::MESSAGE_SSL_REFBOX_2013) {
-                    ref.handlePacket(visionFrame);
+                    ref.handlePacket(visionFrame, SENDER_NAME_FOR_REFEREE);
                     if (ref.getFlipped() != lastFlipped) {
                         tracker.setFlip(ref.getFlipped());
                         lastFlipped = ref.getFlipped();

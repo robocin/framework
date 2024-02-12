@@ -29,10 +29,12 @@
 
 import { log } from "base/amun";
 import { Coordinates } from "base/coordinates";
+import * as Option from "base/option";
 import * as pb from "base/protobuf";
-import { FriendlyRobot } from "base/robot";
+import { FriendlyRobot, Robot } from "base/robot";
 import { Position, Speed, Vector } from "base/vector";
 import * as vis from "base/vis";
+
 
 interface Obstacle {
 	name: string | undefined;
@@ -174,7 +176,7 @@ interface PathObjectRRT extends PathObjectCommon {
 	 * Tests a given path for collisions with any obstacle.
 	 * The spline is based on the global coordinate system!
 	 * @param path - minimum required corridor size
-	 * @param radius - radius
+	 * @param radius - radius (must be the robot radius)
 	 * @returns true if no collision is detected
 	 */
 	test(path: pb.robot.Spline, radius: number): boolean;
@@ -201,7 +203,7 @@ type TrajectoryPathResult = {
 }[];
 
 // just some impossible to create type, is actually a C++ external
-type TrajectoryObstacle = number & {_tag: "Trajectory obstacle"};
+type TrajectoryObstacle = number & { _tag: "Trajectory obstacle" };
 
 interface PathObjectTrajectory extends PathObjectCommon {
 	calculateTrajectory(startX: number, startY: number, startSpeedX: number, startSpeedY: number,
@@ -220,6 +222,7 @@ interface PathObjectTrajectory extends PathObjectCommon {
 	addRobotTrajectoryObstacle(obstacle: TrajectoryObstacle, priority: number, radius: number): void;
 	maxIntersectingObstaclePrio(): number;
 	setRobotId?(id: number): void;
+	addOpponentRobotObstacle?(startX: number, startY: number, speedX: number, speedY: number, prio: number): void;
 }
 
 interface AmunPath {
@@ -229,13 +232,17 @@ interface AmunPath {
 	createTrajectoryPath(): PathObjectTrajectory;
 }
 
-declare var path: any;
+declare let path: any;
 let pathLocal: any = path;
 
 path = undefined;
 
 let teamIsBlue = amun.isBlue();
 let isPerformanceMode = amun.getPerformanceMode();
+
+// enables a more expensive, but also a little more
+// useful visualization for moving lines
+const USE_NEW_MOVING_LINE_VIS = Option.addOption("Use new moving line visualization", false);
 
 // only to be used for unit tests
 export function getOriginalPath(): any {
@@ -297,14 +304,18 @@ export class Path {
 		return `obstacles: ${this._robotId}${teamLetter}`;
 	}
 
-	getTrajectory(startPos: Position, startSpeed: Speed, endPos: Position, endSpeed: Speed, maxSpeed: number, acceleration: number): { pos: Position, speed: Speed, time: number}[] {
+	setHalted() {
+		this.lastWasTrajectoryPath = false;
+	}
+
+	getTrajectory(startPos: Position, startSpeed: Speed, endPos: Position, endSpeed: Speed, maxSpeed: number, acceleration: number): { pos: Position; speed: Speed; time: number }[] {
 		this.lastWasTrajectoryPath = true;
 		this.addObstaclesToPath(this._trajectoryInst);
 		let t = this._trajectoryInst.calculateTrajectory(startPos.x, startPos.y, startSpeed.x,
 			startSpeed.y, endPos.x, endPos.y, endSpeed.x, endSpeed.y, maxSpeed, acceleration);
-		let result: { pos: Position, speed: Speed, time: number }[] = [];
+		let result: { pos: Position; speed: Speed; time: number }[] = [];
 		for (let p of t) {
-			result.push({ pos: new Vector(p.px, p.py), speed: new Vector(p.vx, p.vy), time: p.time});
+			result.push({ pos: new Vector(p.px, p.py), speed: new Vector(p.vx, p.vy), time: p.time });
 		}
 		return result;
 	}
@@ -354,7 +365,7 @@ export class Path {
 			// avoid string allocations in ra
 			name = undefined;
 		}
-		this.circleObstacles.push({x: x, y: y, radius: radius, name: name, prio: prio});
+		this.circleObstacles.push({ x: x, y: y, radius: radius, name: name, prio: prio });
 	}
 
 	/** WARNING: only adds the obstacle to the trajectory path finding */
@@ -369,9 +380,9 @@ export class Path {
 
 		if (!isPerformanceMode) {
 			let positions = [];
-			let SAMPLES = (acc.x === 0 && acc.y === 0) ? 2 : 10;
-			let timeStep = (endTime - startTime) / (SAMPLES - 1);
-			for (let i = 0;i < SAMPLES;i++) {
+			const SAMPLES = (acc.x === 0 && acc.y === 0) ? 2 : 10;
+			const timeStep = (endTime - startTime) / (SAMPLES - 1);
+			for (let i = 0; i < SAMPLES; i++) {
 				let time = i * timeStep;
 				let pos = startPos + speed * time + acc * (0.5 * time * time);
 				positions.push(pos);
@@ -403,8 +414,8 @@ export class Path {
 			// avoid string allocations in ra
 			name = undefined;
 		}
-		this.lineObstacles.push({start_x: start_x, start_y: start_y, stop_x: stop_x, stop_y: stop_y,
-			radius: radius, name: name, prio: prio});
+		this.lineObstacles.push({ start_x: start_x, start_y: start_y, stop_x: stop_x, stop_y: stop_y,
+			radius: radius, name: name, prio: prio });
 	}
 
 	/** WARNING: only adds the obstacle to the trajectory path finding */
@@ -422,20 +433,40 @@ export class Path {
 		}
 
 		if (!isPerformanceMode) {
-			let positions1 = [], positions2 = [];
-			let SAMPLES = (acc1.x === 0 && acc1.y === 0 && acc2.x === 0 && acc2.y === 0) ? 2 : 10;
-			let timeStep = (endTime - startTime) / (SAMPLES - 1);
-			for (let i = 0;i < SAMPLES;i++) {
-				let time = i * timeStep;
-				let pos1 = startPos1 + speed1 * time + acc1 * (0.5 * time * time);
-				let pos2 = startPos2 + speed2 * time + acc2 * (0.5 * time * time);
-				positions1.push(pos1);
-				positions2.push(pos2);
+			if (USE_NEW_MOVING_LINE_VIS) {
+				if (acc1.equals(new Vector(0, 0))
+						&& acc2.equals(new Vector(0, 0))
+						&& speed1.equals(new Vector(0, 0))
+						&& speed2.equals(new Vector(0, 0))) {
+					// both ends are stationary
+					vis.addPathRaw(this.getObstacleString(), [startPos1, startPos2], vis.colors.orange.setAlpha(127), undefined, undefined, width);
+				} else {
+					const SAMPLES = 5;
+					let timeStep = (endTime - startTime) / (SAMPLES - 1);
+					for (let i = 0; i < SAMPLES; i++) {
+						let time = i * timeStep;
+						let pos1 = startPos1 + speed1 * time + acc1 * (0.5 * time * time);
+						let pos2 = startPos2 + speed2 * time + acc2 * (0.5 * time * time);
+						let alpha = 0.5 * 0.5 ** (startTime + time);
+						vis.addPathRaw(this.getObstacleString(), [pos1, pos2], vis.colors.orange.setAlpha(255 * alpha), undefined, undefined, width);
+					}
+				}
+			} else {
+				let positions1 = [], positions2 = [];
+				const SAMPLES = (acc1.x === 0 && acc1.y === 0 && acc2.x === 0 && acc2.y === 0) ? 2 : 10;
+				const timeStep = (endTime - startTime) / (SAMPLES - 1);
+				for (let i = 0; i < SAMPLES; i++) {
+					let time = i * timeStep;
+					let pos1 = startPos1 + speed1 * time + acc1 * (0.5 * time * time);
+					let pos2 = startPos2 + speed2 * time + acc2 * (0.5 * time * time);
+					positions1.push(pos1);
+					positions2.push(pos2);
+				}
+				vis.addPathRaw(this.getObstacleString(), [startPos1, positions1[SAMPLES - 1]], vis.colors.orangeHalf, undefined, undefined, width);
+				vis.addPathRaw(this.getObstacleString(), [startPos2, positions2[SAMPLES - 1]], vis.colors.orangeHalf, undefined, undefined, width);
+				vis.addPathRaw(this.getObstacleString(), positions1, vis.colors.orangeHalf);
+				vis.addPathRaw(this.getObstacleString(), positions2, vis.colors.orangeHalf);
 			}
-			vis.addPathRaw(this.getObstacleString(), [startPos1, positions1[SAMPLES - 1]], vis.colors.orangeHalf, undefined, undefined, width);
-			vis.addPathRaw(this.getObstacleString(), [startPos2, positions2[SAMPLES - 1]], vis.colors.orangeHalf, undefined, undefined, width);
-			vis.addPathRaw(this.getObstacleString(), positions1, vis.colors.orangeHalf);
-			vis.addPathRaw(this.getObstacleString(), positions2, vis.colors.orangeHalf);
 		}
 
 		this._trajectoryInst.addMovingLine(startTime, endTime, startPos1.x, startPos1.y,
@@ -453,13 +484,13 @@ export class Path {
 		if (!isPerformanceMode) {
 			vis.addPolygonRaw(this.getObstacleString(),
 					[new Vector(start_x, start_y), new Vector(start_x, stop_y), new Vector(stop_x, stop_y),
-					new Vector(stop_x, start_y)], vis.colors.redHalf, true);
+						new Vector(stop_x, start_y)], vis.colors.redHalf, true);
 		} else {
 			// avoid string allocations in ra
 			name = undefined;
 		}
-		this.rectObstacles.push({start_x: start_x, start_y: start_y, stop_x: stop_x, stop_y: stop_y,
-			radius: radius, name: name, prio: prio});
+		this.rectObstacles.push({ start_x: start_x, start_y: start_y, stop_x: stop_x, stop_y: stop_y,
+			radius: radius, name: name, prio: prio });
 	}
 
 	addTriangle(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number,
@@ -481,14 +512,31 @@ export class Path {
 			// avoid string allocations in ra
 			name = undefined;
 		}
-		this.triangleObstacles.push({x1: x1, y1: y1, x2: x2, y2: y2, x3: x3, y3: y3,
-			lineWidth: lineWidth, name: name, prio: prio});
+		this.triangleObstacles.push({ x1: x1, y1: y1, x2: x2, y2: y2, x3: x3, y3: y3,
+			lineWidth: lineWidth, name: name, prio: prio });
 	}
 
 	addFriendlyRobotObstacle(robot: FriendlyRobot, radius: number, prio: number) {
 		this._trajectoryInst.addRobotTrajectoryObstacle(robot.path._trajectoryInst.getTrajectoryAsObstacle(), prio, radius);
 		if (!isPerformanceMode) {
 			vis.addCircle(this.getObstacleString(), robot.pos, 2 * robot.radius, vis.colors.goldHalf, false, undefined, undefined, robot.radius);
+		}
+	}
+
+	hasOpponentRobotObstacle(): boolean {
+		return this._trajectoryInst.addOpponentRobotObstacle !== undefined;
+	}
+
+	addOpponentRobotObstacle(robot: Robot, prio: number) {
+		if (!this._trajectoryInst.addOpponentRobotObstacle) {
+			throw new Error("Can not add opponent robot obstacle, update Ra to fix!");
+		}
+		const start = Coordinates.toGlobal(robot.pos);
+		const speed = Coordinates.toGlobal(robot.speed);
+		this._trajectoryInst.addOpponentRobotObstacle(start.x, start.y, speed.x, speed.y, prio);
+		if (!isPerformanceMode) {
+			vis.addCircle(this.getObstacleString(), robot.pos, 1.5 * robot.radius, vis.colors.orchidHalf, false, undefined, undefined, robot.radius * 0.5);
+			vis.addPath(this.getObstacleString(), [robot.pos, robot.pos + robot.speed], vis.colors.orchidHalf);
 		}
 	}
 

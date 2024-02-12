@@ -24,6 +24,7 @@
 #include <lua.hpp>
 #include <QString>
 #include <QStringList>
+#include <Eigen/Dense>
 #include "strategy/script/abstractstrategyscript.h"
 #include "strategy/script/strategytype.h"
 
@@ -62,11 +63,15 @@ private:
     void replaceLuaFunction(const char *module, const char *key, lua_CFunction replacement);
     void removeLuaFunction(const char *module, const char *key);
 
+private slots:
+    void requestRecording();
+
 private:
     lua_State *m_state;
     FileWatcher *m_watcher;
 
     qint64 m_startTime;
+
 };
 
 #endif // LUA_H

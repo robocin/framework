@@ -18,19 +18,21 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-set(PROTOBUF_SUBPATH "lib/${CMAKE_STATIC_LIBRARY_PREFIX}protobuf${CMAKE_STATIC_LIBRARY_SUFFIX}")
-set(PROTOC_SUBPATH "bin/protoc${CMAKE_EXECUTABLE_SUFFIX}")
-
 include(ExternalProject)
 include(ExternalProjectHelper)
+
+set(PROTOBUF_SUBPATH "${CMAKE_INSTALL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}protobuf${CMAKE_STATIC_LIBRARY_SUFFIX}")
+set(PROTOC_SUBPATH "bin/protoc${CMAKE_EXECUTABLE_SUFFIX}")
 
 ExternalProject_Add(project_protobuf
     URL http://www.robotics-erlangen.de/downloads/libraries/protobuf-cpp-3.6.1.tar.gz
     URL_HASH SHA256=b3732e471a9bb7950f090fd0457ebd2536a9ba0891b7f3785919c654fe2a2529
     DOWNLOAD_NO_PROGRESS true
     PATCH_COMMAND cp ${CMAKE_CURRENT_LIST_DIR}/protobuf.CMakeLists.txt CMakeLists.txt
+    DOWNLOAD_DIR "${DEPENDENCY_DOWNLOADS}"
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+        -DCMAKE_TOOLCHAIN_FILE:PATH=${CMAKE_TOOLCHAIN_FILE}
         -DCMAKE_C_COMPILER:PATH=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER:PATH=${CMAKE_CXX_COMPILER}
         -DCMAKE_MAKE_PROGRAM:PATH=${CMAKE_MAKE_PROGRAM}
@@ -39,11 +41,11 @@ ExternalProject_Add(project_protobuf
         -DCMAKE_CXX_FLAGS:STRING=-std=gnu++11
         # the tests fail to build :-(
         -Dprotobuf_BUILD_TESTS:BOOL=OFF
-	STEP_TARGETS install
+    STEP_TARGETS install
 )
 # the byproducts are available after the install step
 ExternalProject_Add_Step(project_protobuf out
-	DEPENDEES install
+    DEPENDEES install
     BYPRODUCTS
         "<INSTALL_DIR>/${PROTOBUF_SUBPATH}"
         "<INSTALL_DIR>/${PROTOC_SUBPATH}"

@@ -181,9 +181,9 @@ static void convertSpecs(const robot::Specs& in, T outGen, bool blueTeam, bool* 
         rsef.set_dribbler_height(in.dribbler_height());
         useSpecialFields = true;
     }
+    // ignore simulation_limits
     if (useSpecialFields) {
         out->add_custom()->PackFrom(rsef);
-
     }
     *success = true;
 }
@@ -245,7 +245,7 @@ void NetworkTransceiver::handleCommand(const Command &command)
     }
     static bool sendMessage = true;
     if (sendMessage) {
-        const int highest_field = 20;
+        const int highest_field = 21;
         const int expected_fields = highest_field - 1;
         auto* desc = robot::Specs::descriptor();
         int real_fields = desc->field_count();
@@ -321,7 +321,8 @@ void NetworkTransceiver::handleResponse()
                     emit sendSSLSimError(sslErrors);
                 }
             });
-        if (!res.ParseFromArray(datagram.data().data(), datagram.data().size())) {
+        const QByteArray data = datagram.data();
+        if (!res.ParseFromArray(data.data(), data.size())) {
             errors->set_time(m_timer->currentTime());
             hadErrors = true;
             std::string result = "Error connected simulator (response unreadable)";

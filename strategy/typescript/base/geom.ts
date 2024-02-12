@@ -26,6 +26,7 @@
 import * as MathUtil from "base/mathutil";
 import { Position, RelativePosition, Vector } from "base/vector";
 
+// eslint-disable-next-line @typescript-eslint/naming-convention
 function intersectCircleCircle_OLD(c1: Position, r1: number, c2: Position, r2: number): [Position?, Position?] {
 	let dist = c1.distanceTo(c2);
 	if (dist > r1 + r2) {
@@ -63,14 +64,14 @@ function intersectCircleCircle_OLD(c1: Position, r1: number, c2: Position, r2: n
 export let intersectCircleCircle = intersectCircleCircleCos;
 
 function intersectCircleCircleCos(c1: Position, r1: number, c2: Position, r2: number): [Position?, Position?] {
-	let dist = c1.distanceTo(c2);
+	const dist = c1.distanceTo(c2);
 	// check for invalid triangles
 	if (r1 > r2 + dist || r2 > r1 + dist || dist > r1 + r2) {
 		return [];
 	}
 
-	let cosR1 = (r1 * r1 + dist * dist - r2 * r2) /  (2 * dist);
-	let M = (c2 - c1) * (cosR1 / dist);
+	const cosR1 = (r1 * r1 + dist * dist - r2 * r2) / (2 * dist);
+	const M = (c2 - c1) * (cosR1 / dist);
 	let [res1, res2, l1, l2] = intersectLineCircle(c1 + M, M.perpendicular(), c1, r1);
 
 	if (res1 == undefined) {
@@ -83,8 +84,8 @@ function intersectCircleCircleCos(c1: Position, r1: number, c2: Position, r2: nu
 }
 
 export function boundRect(p1: Position, pos: Position, p2: Position): Position {
-	return new Vector(MathUtil.bound(Math.min(p1.x,p2.x), pos.x, Math.max(p1.x,p2.x)),
-						MathUtil.bound(Math.min(p1.y,p2.y), pos.y, Math.max(p1.y,p2.y)));
+	return new Vector(MathUtil.bound(Math.min(p1.x, p2.x), pos.x, Math.max(p1.x, p2.x)),
+						MathUtil.bound(Math.min(p1.y, p2.y), pos.y, Math.max(p1.y, p2.y)));
 	// return new Vector(MathUtil.bound(min.x, pos.x, max.x), MathUtil.bound(min.y, pos.y, max.y))
 }
 
@@ -146,7 +147,7 @@ export function intersectLineCircle(offset: Position, dir: RelativePosition, cen
  * lambda1, lambda2, lambda3, lambda4 can be undefined if no intersection exists or +/-Infinity if the line is inside the corridor
  * the intersection with their lambdas are sorted so that lambda1 <= lambda2
  */
-export function intersectLineCorridor(offset : Position, direction: RelativePosition, offsetCorridor: Position,
+export function intersectLineCorridor(offset: Position, direction: RelativePosition, offsetCorridor: Position,
 		directionCorridor: RelativePosition, widthHalf: number): [Position?, Position?, number?, number?, number?, number?] {
 	if (directionCorridor.equals(new Vector(0, 0))) {
 		throw new Error("intersectLineCorridor: directionCorridor can not be a 0 vector");
@@ -336,6 +337,14 @@ export function isInTriangle(a: Position, b: Position, c: Position, p: Position)
 	let v = (dot00 * dot12 - dot01 * dot02) * invDenom;
 
 	return v >= 0 && u + v <= 1;
+}
+
+export function degreeToRadian(angleInDegree: number): number {
+	return angleInDegree * Math.PI / 180;
+}
+
+export function radianToDegree(angleInRadian: number): number {
+	return angleInRadian * 180 / Math.PI;
 }
 
 /**

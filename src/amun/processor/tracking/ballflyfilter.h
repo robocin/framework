@@ -22,133 +22,129 @@
 #define BALLFLYFILTER_H
 
 #include "abstractballfilter.h"
-#include "quadraticleastsquaresfitter.h"
 #include "protobuf/ssl_detection.pb.h"
 #include "protobuf/world.pb.h"
 
-struct ChipDetection {
-    ChipDetection(float s, float as, float t, Eigen::Vector2f bp, Eigen::Vector2f dp,  float a, Eigen::Vector2f r, quint32 cid, bool cc, bool lc)
-        :  dribblerSpeed(s), absSpeed(as), time(t), ballPos(bp), dribblerPos(dp), robotPos(r), cameraId(cid), ballArea(a), chipCommand(cc), linearCommand(lc)  {}
-    ChipDetection(){} // make QVector happy
-
-    float dribblerSpeed;
-    float absSpeed;
-    double time; // in ns
-    Eigen::Vector2f ballPos;
-    Eigen::Vector2f dribblerPos;
-    Eigen::Vector2f robotPos;
-    quint32 cameraId;
-    float ballArea;
-    bool chipCommand;
-    bool linearCommand;
-};
+#include <optional>
 
 class FlyFilter : public AbstractBallFilter
 {
 public:
-    explicit FlyFilter(const VisionFrame& frame, CameraInfo* cameraInfo, const FieldTransform &transform);
+    explicit FlyFilter(const VisionFrame& frame, CameraInfo* cameraInfo, const FieldTransform &transform, const world::BallModel &ballModel);
     FlyFilter(const FlyFilter &filter) = default;
 
-    void moveToCamera(qint32 primaryCamera);
-
     void processVisionFrame(const VisionFrame& frame) override;
-    bool acceptDetection(const VisionFrame& frame) override;
-    void writeBallState(world::Ball *ball, qint64 predictionTime, const QVector<RobotInfo> &robots) override;
+    int chooseDetection(const std::vector<VisionFrame>& frames) const override;
+    void writeBallState(world::Ball *ball, qint64 predictionTime, const QVector<RobotInfo> &robots, qint64 lastCameraFrameTime) override;
     float distToStartPos() { return m_distToStartPos; }
 
-    bool isActive();
-    bool isShot();
+    bool isActive() const;
 
 private:
-    struct PinvResult {
-        float x0;
-        float y0;
-        float z0;
-        float vx;
-        float vy;
-        float vz;
-        float distStartPos;
-        float vxControl;
-        float vyControl;
-        float refSpeed;
+    enum ShootCommand {
+        NONE = 0,
+        LINEAR = 1,
+        CHIP = 2,
+        BOTH = 3
     };
 
-    struct IntersectionResult {
-        Eigen::Vector2f intersection;
-        Eigen::Vector2f intersectionGroundSpeed;
-        float intersectionZSpeed;
+    struct ChipDetection {
+        ChipDetection(float s, float as, float t, float ct, Eigen::Vector2f bp, Eigen::Vector2f dp, Eigen::Vector2f r, quint32 cid, ShootCommand sc, int rid)
+            :  dribblerSpeed(s), absSpeed(as), time(t), captureTime(ct), ballPos(bp), dribblerPos(dp), robotPos(r), robotId(rid), cameraId(cid), shootCommand(sc)  {}
+        ChipDetection(){} // make QVector happy
+
+        float dribblerSpeed;
+        float absSpeed;
+        float time; // in seconds since init of filter
+        float captureTime; // seconds since init of filter
+        Eigen::Vector2f ballPos;
+        Eigen::Vector2f dribblerPos;
+        Eigen::Vector2f robotPos;
+        int robotId;
+        quint32 cameraId;
+        ShootCommand shootCommand;
     };
 
-    bool detectionCurviness(const PinvResult& pinvRes);
-    bool detectionHeight();
-    bool detectionSpeed();
-    bool detectionPinv(const PinvResult &pinvRes);
-    bool checkIsShot();
-    bool collision();
-    unsigned numMeasurementsWithOwnCamera();
-    Eigen::Vector3f unproject(const ChipDetection& detection, float ballRadius);
+    // can be used for the initial chip, but also while bouncing
+    struct BallFlight {
+        Eigen::Vector2f flightStartPos;
+        float flightStartTime; // seconds
+        float captureFlightStartTime; // the start time on the vision pc
+        Eigen::Vector2f groundSpeed;
+        float zSpeed; // at the flight start time
+        int startFrame; // the first frame in m_kickFrames that this flight uses
+        float reconstructionError; // the specifics might vary with the reconstruction method
 
-    PinvResult calcPinv();
-    IntersectionResult calcIntersection(const PinvResult &pinvRes);
+        bool hasBounced(float time) const;
+        // returns the estimated flight that will occur after the next bounce
+        BallFlight afterBounce(int newStartFrame, const world::BallModel &ballModel) const;
+        Eigen::Vector2f touchdownPos() const;
+        static BallFlight betweenChipFrames(const ChipDetection &first, const ChipDetection &last, int startFrame);
+    };
 
-    void approachPinvApply(const PinvResult& pinvRes);
-    void approachIntersectApply(const IntersectionResult &intRes);
-    void approachAreaApply();
+    ChipDetection createChipDetection(const VisionFrame& frame) const;
+    float toLocalTime(qint64 time) const; // returns a result in seconds, relative to the initialization of the filter
 
-    bool approachPinvApplicable(const PinvResult& pinvRes);
-    bool approachIntersectApplicable(const IntersectionResult &intRes);
+    bool detectionSpeed() const;
+    bool detectionPinv(const BallFlight &pinvRes) const;
+    bool detectChip(const BallFlight &pinvRes) const;
 
-    void parabolicFlightReconstruct(const PinvResult &pinvRes, const IntersectionResult &intRes);
+    bool checkIsShot() const;
+    bool checkIsDribbling() const;
+    bool collision() const;
+    unsigned numMeasurementsWithOwnCamera() const;
+
+    std::optional<BallFlight> calcPinv();
+
+    Eigen::Vector2f approxGroundDirection() const;
+    BallFlight constrainedReconstruction(Eigen::Vector2f shotStartPos, Eigen::Vector2f groundSpeed, float startTime, int startFrame) const;
+
+    BallFlight approachShotDirectionApply() const;
+
+    bool approachPinvApplicable(const BallFlight &pinvRes) const;
+    bool approachShotDirectionApplicable(const BallFlight &reconstruction) const;
+
+    std::optional<BallFlight> parabolicFlightReconstruct(const BallFlight &pinvRes) const;
     void resetFlightReconstruction();
 
+    float chipShotError(const BallFlight &pinvRes) const;
+    float linearShotError() const;
+
     struct Prediction {
-        Prediction(float x, float y, float z, float vx, float vy, float vz) :
-            pos(Eigen::Vector3f(x,y,z)), speed(Eigen::Vector3f(vx,vy,vz)) {}
+        Prediction(Eigen::Vector2f pos2, float z, Eigen::Vector2f speed2, float vz, Eigen::Vector2f touchdown) :
+            pos(Eigen::Vector3f(pos2.x(),pos2.y(),z)), speed(Eigen::Vector3f(speed2.x(),speed2.y(),vz)), touchdownPos(touchdown) {}
 
         Eigen::Vector3f pos;
         Eigen::Vector3f speed;
+        Eigen::Vector2f touchdownPos;
     };
 
-    Prediction predictTrajectory(qint64 time);
+    int detectBouncing();
+    void updateBouncing(qint64 time);
+    Prediction predictTrajectory(float time) const;
 
 private:
-    bool m_shotDetected;
+    qint64 m_initTime;
+
     bool m_chipDetected;
-    bool m_isActive;
-
-    QVector<ChipDetection> m_shotDetectionWindow; // sliding window of size 5
-    QVector<ChipDetection> m_kickFrames;
-
-    Eigen::Vector2f m_chipStartPos;
-    qint64 m_chipStartTime;
-    Eigen::Vector2f m_groundSpeed;
-    float m_zSpeed;
-
-    Eigen::Vector2f m_touchdownPos;
-
-    bool m_bouncing;
-    qint64 m_bounceStartTime;
-    float m_bounceZSpeed;
-    Eigen::Vector2f m_bounceStartPos;
-    Eigen::Vector2f m_bounceGroundSpeed;
 
     int m_shotStartFrame;
+    QVector<ChipDetection> m_shotDetectionWindow; // sliding window
+    QVector<ChipDetection> m_kickFrames;
+    ShootCommand m_shootCommand;
+
+    // the initial flight, bounces are added as they happen
+    // if the flight could not be reconstructed, it will be empty
+    QVector<BallFlight> m_flightReconstructions;
+    // not an assumed bounce by timing, but only the last one determined by vision detections
+    int m_lastBounceFrame;
 
     float m_distToStartPos;
 
-    qint64 m_initTime;
-
-    QuadraticLeastSquaresFitter m_flyFitter;
-
+    float m_biasStrength;
     int m_pinvDataInserted;
     Eigen::VectorXf m_d_detailed;
     Eigen::MatrixXf m_D_detailed;
-    Eigen::VectorXf m_d_coarseControl;
-    Eigen::MatrixXf m_D_coarseControl;
-
-    qint64 m_lastPredictionTime;
-
-    float m_acceptDist = 0;
 };
 
 #endif // BALLFLYFILTER_H

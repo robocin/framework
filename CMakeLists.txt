@@ -22,12 +22,35 @@ cmake_minimum_required(VERSION 3.5.0)
 project(erforce)
 enable_testing()
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
-if(POLICY CMP0071) # compatibility with CMake 3.10.0
-    cmake_policy(SET CMP0071 OLD)
+
+if(MINGW)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(MINGW32 TRUE)
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(MINGW64 TRUE)
+    endif()
 endif()
+
+#
+# Policies
+#
+
+if (POLICY CMP0071)
+    cmake_policy(SET CMP0071 NEW)
+endif()
+
 if(POLICY CMP0072)
     cmake_policy(SET CMP0072 NEW)
 endif()
+
+if (POLICY CMP0114)
+    cmake_policy(SET CMP0114 OLD)
+endif()
+
+if (POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG(-std=c++17 HAVE_C17)
 if (NOT HAVE_C17)
@@ -52,7 +75,7 @@ if(MINGW)
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-ms-bitfields")
 
     # sse floats are already the default for x64
-    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    if(MINGW32)
         # use sse floats, not the insane x87 fpu where intermediate values
         # may have up to 80bit precision, instead of the expected 32bit for floats
         SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse2 -mfpmath=sse")
@@ -83,6 +106,12 @@ endmacro(find_cross_compiler)
 
 find_cross_compiler(ARM_C_CROSS_COMPILER arm-none-eabi-gcc REQUIRED)
 find_cross_compiler(ARM_CXX_CROSS_COMPILER arm-none-eabi-g++)
+if(NOT ARM_C_CROSS_COMPILER)
+    message(STATUS "No suitable cross compiler found, firmware will be unavailable")
+    set(BUILD_FIRMWARE FALSE CACHE BOOL "Build the firmware" FORCE)
+else()
+    set(BUILD_FIRMWARE TRUE CACHE BOOL "Build the firmware")
+endif()
 
 # downloads
 add_custom_target(download)
@@ -127,6 +156,9 @@ if(UNIX AND NOT APPLE)
     find_package(Jemalloc)
 endif()
 find_package(USB)
+
+set(DEPENDENCY_DOWNLOADS "${CMAKE_BINARY_DIR}/dependencies")
+
 if(MINGW AND NOT TARGET lib::usb)
     include(BuildUSB)
 endif()
@@ -139,10 +171,11 @@ endif()
 include(BuildBullet)
 include(BuildEigen)
 include(BuildSourceMap)
+include(BuildLibGit2)
 include(BuildLuaJIT2)
 include(BuildGoogleTest)
 include(GetGameController)
-find_package(V8 6.8)
+find_package(V8 10.5.7)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 add_subdirectory(src)

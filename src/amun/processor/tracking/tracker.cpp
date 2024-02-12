@@ -36,6 +36,8 @@ Tracker::Tracker(bool robotsOnly, bool isSpeedTracker) :
     m_geometryUpdated(false),
     m_hasVisionData(false),
     m_virtualFieldEnabled(false),
+    m_lastSlowVisionFrame(0),
+    m_numSlowVisionFrames(0),
     m_currentBallFilter(nullptr),
     m_aoiEnabled(false),
     m_aoi_x1(0.0f),
@@ -132,8 +134,42 @@ void Tracker::process(qint64 currentTime)
 
         const SSL_DetectionFrame &detection = wrapper.detection();
         const qint64 visionProcessingTime = (detection.t_sent() - detection.t_capture()) * 1E9;
-        // time on the field for which the frame was captured
-        // with Timer::currentTime being now
+
+        /* Misconfigured or slow vision computers may produce detection frames
+         * with a large processing time. We discard these frames later since
+         * they are considered too old to be relevant.
+         */
+        auto isVisionProcessingSlow = [this, currentTime, visionProcessingTime]() -> bool {
+            constexpr qint64 VISION_WARN_TIME = 40 * 1E6; // 40ms to ns
+            if (visionProcessingTime >= VISION_WARN_TIME) {
+                m_numSlowVisionFrames++;
+                m_lastSlowVisionFrame = currentTime;
+            }
+
+            /* There may be outliers on the vision computer. We only want to warn
+             * if the delay is continously high
+             */
+            if (m_lastSlowVisionFrame + 10E9 < currentTime) {
+                m_numSlowVisionFrames = 0;
+            }
+
+            /* There should be around 75 detections per second, warn if one third
+             * is bad (25 per second) for around five seconds in a ten second
+             * period
+             */
+            return m_numSlowVisionFrames > 125;
+        };
+
+        if (isVisionProcessingSlow()) {
+            m_errorMessages.append(QString(
+                "<font color=\"red\">WARNING:</font> Multiple vision detection frames with a high processing time. These may be discarded."
+            ));
+
+            // Reset to avoid log spam
+            m_numSlowVisionFrames = 0;
+        }
+
+        // time on the field for which the frame was captured as seen by this computers clock
         const qint64 sourceTime = p.time - visionProcessingTime - m_systemDelay;
 
         // delayed reset to clear frames older than the reset command
@@ -158,22 +194,8 @@ void Tracker::process(qint64 currentTime)
         }
 
         if (!m_robotsOnly) {
-            QList<RobotFilter *> bestRobots = getBestRobots(sourceTime);
+            trackBallDetections(detection, sourceTime, visionProcessingTime);
 
-            for (int i = 0; i < detection.balls_size(); i++) {
-
-                // filter out all ball detections originating from people on the field
-                // they can be identified by having many detections in a small area
-                const float RADIUS = 500; // in millimiter
-                const int MAX_NEAR_COUNT = 3;
-                const auto nearCount = std::count_if(detection.balls().begin(), detection.balls().end(), [&](const SSL_DetectionBall &ball) {
-                    return (Eigen::Vector2f(detection.balls(i).x(), detection.balls(i).y()) - Eigen::Vector2f(ball.x(), ball.y())).norm() < RADIUS;
-                });
-
-                if (nearCount <= MAX_NEAR_COUNT) {
-                    trackBall(detection.balls(i), sourceTime, detection.camera_id(), bestRobots, visionProcessingTime);
-                }
-            }
             for (BallTracker * filter : m_ballFilter) {
                 filter->updateConfidence();
             }
@@ -184,20 +206,28 @@ void Tracker::process(qint64 currentTime)
     m_visionPackets.clear();
 }
 
-static RobotFilter* bestFilter(QList<RobotFilter*> &filters, int minFrameCount)
+static RobotFilter* bestFilter(QList<RobotFilter*> &filters, int minFrameCount, int desiredCamera)
 {
-    // get first filter that has the minFrameCount and move it to the front
-    // this is required to ensure a stable result
+    // Get first filter of the correct camera that has the minFrameCount and move it to the front
+    // This is required to ensure a stable result
+    // If a filter for the desired camera is not present, use the first otherwise matching (and move it to the front)
+    RobotFilter *result = nullptr;
     for (RobotFilter* item : filters) {
         if (item->frameCounter() >= minFrameCount) {
-            if (filters.first() != item) {
-                filters.removeOne(item);
-                filters.prepend(item);
+            const bool isCorrectCamera = static_cast<int>(item->primaryCamera()) == desiredCamera;
+            if (result == nullptr || isCorrectCamera) {
+                result = item;
             }
-            return item;
+            if (isCorrectCamera || desiredCamera == -1) {
+                break;
+            }
         }
     }
-    return nullptr;
+    if (result && filters.first() != result) {
+        filters.removeOne(result);
+        filters.prepend(result);
+    }
+    return result;
 }
 
 void Tracker::prioritizeBallFilters()
@@ -272,10 +302,17 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
     worldState->set_has_vision_data(m_hasVisionData);
     worldState->set_system_delay(m_systemDelay);
 
+    if (!m_robotsOnly) {
+        BallTracker *ball = bestBallFilter();
+        if (ball != nullptr) {
+            m_desiredRobotCamera = ball->primaryCamera();
+        }
+    }
+
     QVector<RobotInfo> robotInfos;
     robotInfos.reserve(m_robotFilterBlue.size() + m_robotFilterYellow.size());
     for(RobotMap::iterator it = m_robotFilterYellow.begin(); it != m_robotFilterYellow.end(); ++it) {
-        RobotFilter *robot = bestFilter(*it, minFrameCount);
+        RobotFilter *robot = bestFilter(*it, minFrameCount, m_desiredRobotCamera);
         if (robot != nullptr) {
             robot->update(currentTime);
             robot->get(worldState->add_yellow(), *m_fieldTransform, false);
@@ -284,7 +321,7 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
     }
 
     for(RobotMap::iterator it = m_robotFilterBlue.begin(); it != m_robotFilterBlue.end(); ++it) {
-        RobotFilter *robot = bestFilter(*it, minFrameCount);
+        RobotFilter *robot = bestFilter(*it, minFrameCount, m_desiredRobotCamera);
         if (robot != nullptr) {
             robot->update(currentTime);
             robot->get(worldState->add_blue(), *m_fieldTransform, false);
@@ -303,7 +340,8 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
 
         if (ball != nullptr) {
             ball->update(currentTime);
-            ball->get(worldState->mutable_ball(), *m_fieldTransform, resetRaw, robotInfos);
+            const qint64 lastCameraFrameTime = m_lastUpdateTime[ball->primaryCamera()];
+            ball->get(worldState->mutable_ball(), *m_fieldTransform, resetRaw, robotInfos, lastCameraFrameTime);
         }
     }
 
@@ -470,7 +508,7 @@ void Tracker::invalidateRobots(RobotMap &map, qint64 currentTime)
     }
 }
 
-QList<RobotFilter *> Tracker::getBestRobots(qint64 currentTime)
+QList<RobotFilter *> Tracker::getBestRobots(qint64 currentTime, int desiredCamera)
 {
     const qint64 resetTimeout = 100*1000*1000;
     // only return objects which have been tracked for more than minFrameCount frames
@@ -480,14 +518,14 @@ QList<RobotFilter *> Tracker::getBestRobots(qint64 currentTime)
     QList<RobotFilter *> filters;
 
     for(RobotMap::iterator it = m_robotFilterYellow.begin(); it != m_robotFilterYellow.end(); ++it) {
-        RobotFilter *robot = bestFilter(*it, minFrameCount);
+        RobotFilter *robot = bestFilter(*it, minFrameCount, desiredCamera);
         if (robot != nullptr) {
             robot->update(currentTime);
             filters.append(robot);
         }
     }
     for(RobotMap::iterator it = m_robotFilterBlue.begin(); it != m_robotFilterBlue.end(); ++it) {
-        RobotFilter *robot = bestFilter(*it, minFrameCount);
+        RobotFilter *robot = bestFilter(*it, minFrameCount, desiredCamera);
         if (robot != nullptr) {
             robot->update(currentTime);
             filters.append(robot);
@@ -515,47 +553,83 @@ static RobotInfo nearestRobotInfo(const QList<RobotFilter *> &robots, const SSL_
     return nearestRobot;
 }
 
-void Tracker::trackBall(const SSL_DetectionBall &ball, qint64 receiveTime, quint32 cameraId, const QList<RobotFilter *> &bestRobots, qint64 visionProcessingDelay)
+void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiveTime, qint64 visionProcessingDelay)
 {
+    const qint64 captureTime = frame.t_capture() * 1E9;
+    const quint32 cameraId = frame.camera_id();
 
-    if (m_aoiEnabled && !isInAOI(ball.x(), ball.y() , *m_fieldTransform, m_aoi_x1, m_aoi_y1, m_aoi_x2, m_aoi_y2)) {
+    if (!m_cameraInfo->cameraPosition.contains(cameraId)) {
         return;
     }
-    if (! m_cameraInfo->cameraPosition.contains(cameraId)) {
+
+    const QList<RobotFilter*> bestRobots = getBestRobots(receiveTime, frame.camera_id());
+
+    std::vector<VisionFrame> ballFrames;
+    ballFrames.reserve(frame.balls_size());
+    for (int i = 0; i < frame.balls_size(); i++) {
+
+        if (m_aoiEnabled && !isInAOI(frame.balls(i).x(), frame.balls(i).y() , *m_fieldTransform, m_aoi_x1, m_aoi_y1, m_aoi_x2, m_aoi_y2)) {
+            continue;
+        }
+
+        // filter out all ball detections originating from people on the field
+        // they can be identified by having many detections in a small area
+        const float RADIUS = 500; // in millimiter
+        const int MAX_NEAR_COUNT = 3;
+        const auto nearCount = std::count_if(frame.balls().begin(), frame.balls().end(), [&](const SSL_DetectionBall &ball) {
+            return (Eigen::Vector2f(frame.balls(i).x(), frame.balls(i).y()) - Eigen::Vector2f(ball.x(), ball.y())).norm() < RADIUS;
+        });
+
+        if (nearCount <= MAX_NEAR_COUNT) {
+            const RobotInfo robotInfo = nearestRobotInfo(bestRobots, frame.balls(i));
+            ballFrames.push_back(VisionFrame(frame.balls(i), receiveTime, cameraId, robotInfo, visionProcessingDelay, captureTime));
+        }
+    }
+
+    if (ballFrames.empty()) {
         return;
     }
-    RobotInfo robotInfo = nearestRobotInfo(bestRobots, ball);
 
-    bool acceptingFilterWithCamId = false;
-    BallTracker *acceptingFilterWithOtherCamId = nullptr;
+    bool detectionWasAccepted = false;
+    std::vector<bool> acceptingFilterWithCamId(ballFrames.size(), false);
+    std::vector<BallTracker*> acceptingFilterWithOtherCamId(ballFrames.size(), nullptr);
     for (BallTracker *filter : m_ballFilter) {
         filter->update(receiveTime);
-        if (filter->acceptDetection(ball, receiveTime, cameraId, robotInfo, visionProcessingDelay)) {
+
+        // from a given vision packet, each filter can only accept one detection,
+        // since it is not possible to see the true ball multiple times
+        const int choice = filter->chooseDetection(ballFrames);
+        if (choice >= 0) {
             if (filter->primaryCamera() == cameraId) {
-                filter->addVisionFrame(ball, receiveTime, cameraId, robotInfo, visionProcessingDelay);
-                acceptingFilterWithCamId = true;
+                filter->addVisionFrame(ballFrames.at(choice));
+                acceptingFilterWithCamId[choice] = true;
+                detectionWasAccepted = true;
             } else {
                 // remember filter for copying its state in case that no filter
                 // for the current camera does accept the frame
                 // ideally, you would choose which filter to use for this
-                acceptingFilterWithOtherCamId = filter;
+                acceptingFilterWithOtherCamId[choice] = filter;
             }
         }
     }
 
-    if (!acceptingFilterWithCamId) {
-        BallTracker* bt;
-        if (acceptingFilterWithOtherCamId != nullptr) {
-            // copy filter from old camera
-            bt = new BallTracker(*acceptingFilterWithOtherCamId, cameraId);
-        } else {
-            // create new Ball Filter without initial movement
-            bt = new BallTracker(ball, receiveTime, cameraId, m_cameraInfo, robotInfo, visionProcessingDelay, *m_fieldTransform);
+    for (std::size_t i = 0;i<ballFrames.size();i++) {
+        if (!acceptingFilterWithCamId[i]) {
+            BallTracker* bt;
+            if (acceptingFilterWithOtherCamId[i] != nullptr) {
+                // copy filter from old camera
+                bt = new BallTracker(*acceptingFilterWithOtherCamId[i], cameraId);
+            } else {
+                // create new Ball Filter without initial movement
+                bt = new BallTracker(ballFrames[i], m_cameraInfo, *m_fieldTransform, m_ballModel);
+            }
+            m_ballFilter.append(bt);
+            bt->addVisionFrame(ballFrames[i]);
         }
-        m_ballFilter.append(bt);
-        bt->addVisionFrame(ball, receiveTime, cameraId, robotInfo, visionProcessingDelay);
-    } else {
-        // only prioritize when detection was accepted
+    }
+
+    if (detectionWasAccepted) {
+        // only prioritize when at least one detection was accepted
         prioritizeBallFilters();
     }
 }
@@ -571,30 +645,58 @@ void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qi
         return;
     }
 
-    // Data association for robot
-    // For each detected robot search for nearest predicted robot
-    // with same id.
-    // If no robot is closer than .5 m create a new Kalman Filter
+    // Keep one robot filter per camera in which a robot is visible
+    // Every filter gets the data from every camera (if the position matches),
+    // but the primary camera for each filter is still important if the camera calibration is bad
 
-    float nearest = 0.5;
-    RobotFilter *nearestFilter = nullptr;
+    const float MAX_DISTANCE = 0.5;
+    const qint64 PRIMARY_TIMEOUT = 42*1000*1000;
+
+    std::map<qint32, std::pair<float, RobotFilter*>> nearestFilterByCamera;
+    RobotFilter *totalClosest = nullptr;
+    float totalClosestDist = MAX_DISTANCE;
 
     QList<RobotFilter*>& list = robotMap[robot.robot_id()];
     for (RobotFilter *filter : list) {
         filter->update(receiveTime);
         const float dist = filter->distanceTo(robot);
-        if (dist < nearest) {
-            nearest = dist;
-            nearestFilter = filter;
+        if (dist > MAX_DISTANCE) {
+            continue;
+        }
+        const bool isYoung = receiveTime - filter->lastPrimaryTime() > PRIMARY_TIMEOUT;
+        if (static_cast<qint32>(filter->primaryCamera()) != cameraId && isYoung) {
+            continue;
+        }
+
+        if (dist < totalClosestDist) {
+            totalClosestDist = dist;
+            totalClosest = filter;
+        }
+
+        const auto f = nearestFilterByCamera.find(filter->primaryCamera());
+        if (f == nearestFilterByCamera.end() || dist < f->first) {
+            nearestFilterByCamera[filter->primaryCamera()] = {dist, filter};
         }
     }
 
-    if (!nearestFilter) {
-        nearestFilter = new RobotFilter(robot, receiveTime, teamIsYellow);
-        list.append(nearestFilter);
+    if (!totalClosest) {
+        totalClosest = new RobotFilter(robot, receiveTime, teamIsYellow);
+        list.append(totalClosest);
+        nearestFilterByCamera[cameraId] = {totalClosestDist, totalClosest};
     }
 
-    nearestFilter->addVisionFrame(cameraId, robot, receiveTime, visionProcessingDelay);
+    const auto ownCamera = nearestFilterByCamera.find(cameraId);
+    const bool createOwnCameraFilter = ownCamera == nearestFilterByCamera.end();
+    if (createOwnCameraFilter) {
+        RobotFilter *filter = new RobotFilter(*totalClosest);
+        list.append(filter);
+        nearestFilterByCamera[cameraId] = {totalClosestDist, filter};
+    }
+
+    for (const auto &[id, data] : nearestFilterByCamera) {
+        RobotFilter *filter = data.second;
+        filter->addVisionFrame(cameraId, robot, receiveTime, visionProcessingDelay, id == cameraId && createOwnCameraFilter);
+    }
 }
 
 void Tracker::queuePacket(const QByteArray &packet, qint64 time, QString sender)

@@ -26,6 +26,7 @@
 #include "core/protobuffilesaver.h"
 #include "core/sslprotocols.h"
 #include "processor/processor.h"
+#include "processor/trackingreplay.h"
 #include "processor/transceiver.h"
 #include "processor/networktransceiver.h"
 #include "processor/integrator.h"
@@ -36,6 +37,7 @@
 #include "strategy/strategy.h"
 #include "networkinterfacewatcher.h"
 #include "seshat/seshat.h"
+#include "gitinforecorder.h"
 #include <QMetaType>
 #include <QThread>
 #include <QList>
@@ -78,7 +80,8 @@ Amun::Amun(bool simulatorOnly, QObject *parent) :
     m_useAutoref(true),
     m_networkInterfaceWatcher(nullptr),
     m_seshat(new Seshat(20, this)),
-    m_commandConverter(nullptr)
+    m_commandConverter(nullptr),
+    m_gitInfoRecorder(nullptr)
 {
     qRegisterMetaType<QNetworkInterface>("QNetworkInterface");
     qRegisterMetaType<Command>("Command");
@@ -124,7 +127,10 @@ Amun::Amun(bool simulatorOnly, QObject *parent) :
 
     m_networkInterfaceWatcher = (!m_simulatorOnly) ? new NetworkInterfaceWatcher(this) : nullptr;
 
-    m_pathInputSaver = new ProtobufFileSaver("pathinput.pathlog", "KHONSU PATHFINDING LOG", this);
+    m_pathInputSaver[0].reset(new ProtobufFileSaver("pathinput-blue.pathlog", "KHONSU PATHFINDING LOG", this));
+    m_pathInputSaver[1].reset(new ProtobufFileSaver("pathinput-yellow.pathlog", "KHONSU PATHFINDING LOG", this));
+
+    m_gitRecorderThread = new QThread(this);
 }
 
 /*!
@@ -161,6 +167,14 @@ void Amun::start()
     connect(this, SIGNAL(gotCommand(Command)), m_optionsManager, SLOT(handleCommand(Command)));
     connect(m_optionsManager, SIGNAL(sendStatus(Status)), SLOT(handleStatus(Status)));
 
+    m_gitInfoRecorder = new GitInfoRecorder;
+    m_gitInfoRecorder->moveToThread(m_gitRecorderThread);
+    connect(m_gitRecorderThread, SIGNAL(finished()), m_gitInfoRecorder, SLOT(deleteLater()));
+    connect(m_gitInfoRecorder, &GitInfoRecorder::sendStatus, this, &Amun::handleStatus);
+    {
+        QObject signalSource;
+        connect(&signalSource, &QObject::destroyed, m_gitInfoRecorder, &GitInfoRecorder::recordRaGitDiff);
+    }
 
     connect(this, SIGNAL(gotCommand(Command)), m_seshat, SLOT(handleCommand(Command)));
     connect(m_seshat, &Seshat::sendUi, this, &Amun::sendStatus);
@@ -183,15 +197,16 @@ void Amun::start()
         connect(m_debugHelper[i], SIGNAL(sendStatus(Status)), SLOT(handleStatus(Status)));
         connect(m_debugHelperThread, SIGNAL(finished()), m_debugHelper[i], SLOT(deleteLater()));
 
-        m_gameControllerConnection[i].reset(new GameControllerConnection(m_processor->getInternalGameController(), i == 2));
+        m_gameControllerConnection[i].reset(new StrategyGameControllerMediator(m_processor->getInternalGameController(), i == 2));
         m_gameControllerConnection[i]->moveToThread(m_strategyThread[i]);
-        connect(this, &Amun::gotRefereeHost, m_gameControllerConnection[i].get(), &GameControllerConnection::handleRefereeHost);
-        connect(this, &Amun::useInternalGameController, m_gameControllerConnection[i].get(), &GameControllerConnection::switchInternalGameController);
-        connect(this, &Amun::useInternalGameController, m_processor->getInternalGameController(), &SSLGameController::setEnabled);
-        connect(this, &Amun::gotCommandForGC, m_processor->getInternalGameController(), &SSLGameController::handleCommand);
+        connect(m_processor, &Processor::refereeHostChanged, m_gameControllerConnection[i].get(), &StrategyGameControllerMediator::handleRefereeHost);
+        connect(this, &Amun::useInternalGameController, m_gameControllerConnection[i].get(), &StrategyGameControllerMediator::switchInternalGameController);
+        connect(this, &Amun::useInternalGameController, m_processor->getInternalGameController(), &InternalGameController::setEnabled);
+        connect(this, &Amun::gotCommandForGC, m_processor->getInternalGameController(), &InternalGameController::handleCommand);
 
         Q_ASSERT(m_strategy[i] == nullptr);
-        m_strategy[i] = new Strategy(m_timer, strategy, m_debugHelper[i], &m_compilerRegistry, m_gameControllerConnection[i], i == 2, false, m_pathInputSaver);
+        ProtobufFileSaver *pathInput = m_pathInputSaver[std::min(1, i)].get();
+        m_strategy[i] = new Strategy(m_timer, strategy, m_debugHelper[i], &m_compilerRegistry, m_gameControllerConnection[i], i == 2, false, pathInput);
         m_strategy[i]->moveToThread(m_strategyThread[i]);
         connect(m_strategyThread[i], SIGNAL(finished()), m_strategy[i], SLOT(deleteLater()));
 
@@ -211,6 +226,7 @@ void Amun::start()
         // relay status and debug information of strategy
         connect(m_strategy[i], SIGNAL(sendStatus(Status)), SLOT(handleStatus(Status)));
         connect(m_strategy[i], SIGNAL(sendStatus(Status)), m_optionsManager, SLOT(handleStatus(Status)));
+        connect(m_strategy[i], &Strategy::recordGitDiff, m_gitInfoRecorder, &GitInfoRecorder::startGitDiffStrategy);
     }
 
     // replay strategies and connections
@@ -247,8 +263,7 @@ void Amun::start()
         setupReceiver(m_referee, QHostAddress(SSL_GAME_CONTROLLER_ADDRESS), SSL_GAME_CONTROLLER_PORT);
         connect(this, &Amun::updateRefereePort, m_referee, &Receiver::updatePort);
         // move referee packets to processor
-        connect(m_referee, SIGNAL(gotPacket(QByteArray, qint64, QString)), m_processor, SLOT(handleRefereePacket(QByteArray, qint64)));
-        connect(m_referee, SIGNAL(gotPacket(QByteArray,qint64,QString)), SLOT(handleRefereePacket(QByteArray,qint64,QString)));
+        connect(m_referee, &Receiver::gotPacket, m_processor, &Processor::handleRefereePacket);
 
         // create vision
         setupReceiver(m_vision, QHostAddress(SSL_VISION_ADDRESS), SSL_VISION_PORT);
@@ -270,7 +285,7 @@ void Amun::start()
     createSimulator(defaultSimulatorSetup);
     connect(m_processor, SIGNAL(setFlipped(bool)), m_simulator, SLOT(setFlipped(bool)));
 
-    connect(m_processor->getInternalGameController(), &SSLGameController::sendCommand, this, &Amun::handleCommand);
+    connect(m_processor->getInternalGameController(), &InternalGameController::sendCommand, this, &Amun::handleCommand);
 
     if (!m_simulatorOnly) {
         Q_ASSERT(m_transceiver == nullptr);
@@ -306,6 +321,7 @@ void Amun::start()
         m_strategyThread[i]->start();
     }
     m_debugHelperThread->start();
+    m_gitRecorderThread->start();
 }
 
 /*!
@@ -323,6 +339,7 @@ void Amun::stop()
     for (int i = 0;i<5;i++) {
         m_strategyThread[i]->quit();
     }
+    m_gitRecorderThread->quit();
 
     // wait for threads
     m_processorThread->wait();
@@ -336,6 +353,7 @@ void Amun::stop()
     // As the strategy may still be writing to debugHelper, we can only start quitting as soon as the starategy is dead for sure.
     m_debugHelperThread->quit();
     m_debugHelperThread->wait();
+    m_gitRecorderThread->wait();
 
     delete m_optionsManager;
 
@@ -358,6 +376,7 @@ void Amun::stop()
     }
     m_processor = nullptr;
     m_integrator = nullptr;
+    m_gitInfoRecorder = nullptr;
 }
 
 void Amun::setupReceiver(Receiver *&receiver, const QHostAddress &address, quint16 port)
@@ -485,8 +504,8 @@ void Amun::handleCommandLocally(const Command &command)
     if (command->has_tracking()) {
         if (command->tracking().has_tracking_replay_enabled()) {
             bool enable = command->tracking().tracking_replay_enabled();
-            if (enable != m_trackingReplay) {
-                m_trackingReplay = enable;
+            if (enable != m_enableTrackingReplay) {
+                m_enableTrackingReplay = enable;
                 if (enable) {
                     enableTrackingReplay();
                 }
@@ -497,10 +516,8 @@ void Amun::handleCommandLocally(const Command &command)
 
 void Amun::enableTrackingReplay()
 {
-    if (!m_replayProcessor) {
-        m_replayProcessor.reset(new Processor(m_replayTimer, true));
-        connect(m_replayProcessor.get(), &Processor::sendStatus, this, &Amun::handleReplayStatus);
-    }
+    m_trackingReplay.reset(new TrackingReplay(m_replayTimer));
+    connect(m_trackingReplay.get(), &TrackingReplay::gotStatus, this, &Amun::handleReplayStatus);
 }
 
 void Amun::pauseSimulator(const amun::PauseSimulatorCommand &pauseCommand)
@@ -535,11 +552,6 @@ void Amun::pauseSimulator(const amun::PauseSimulatorCommand &pauseCommand)
     }
 }
 
-void Amun::handleRefereePacket(QByteArray, qint64, QString host)
-{
-    emit gotRefereeHost(host);
-}
-
 void Amun::enableAutoref(bool enable)
 {
     m_strategy[2]->blockSignals(!enable);
@@ -571,76 +583,10 @@ void Amun::handleStatus(const Status &status)
 
 void Amun::handleStatusForReplay(const Status &status)
 {
-    const auto previousTime = m_replayTimer->currentTime();
-    m_replayTimer->setTime(status->time(), 0);
-    if (m_trackingReplay) {
-        if (status->has_game_state()) {
-            m_lastTrackingReplayGameState = status;
-        }
-        if (previousTime > status->time()) {
-            m_replayProcessor->resetTracking();
-        }
-        if (status->has_team_blue()) {
-            Command command(new amun::Command);
-            command->mutable_set_team_blue()->CopyFrom(status->team_blue());
-            m_replayProcessor->handleCommand(command);
-        }
-        if (status->has_team_yellow()) {
-            Command command(new amun::Command);
-            command->mutable_set_team_yellow()->CopyFrom(status->team_yellow());
-            m_replayProcessor->handleCommand(command);
-        }
-
-        // radio commands
-        {
-            QMap<qint64, QList<RobotCommandInfo>> yellowRobotCommands, blueRobotCommands;
-            auto time = m_replayTimer->currentTime();
-            for (const auto& command : status->radio_command()) {
-                RobotCommandInfo info;
-                info.generation = command.generation();
-                info.robotId = command.id();
-                info.command.reset(new robot::Command(command.command()));
-                qint64 commandTime = command.has_command_time() ? command.command_time() : time;
-                if (command.is_blue()) {
-                    blueRobotCommands[commandTime].append(info);
-                } else {
-                    yellowRobotCommands[commandTime].append(info);
-                }
-            }
-            for (qint64 time : yellowRobotCommands.keys()) {
-                m_replayProcessor->handleStrategyCommands(false, yellowRobotCommands[time], time);
-            }
-            for (qint64 time : blueRobotCommands.keys()) {
-                m_replayProcessor->handleStrategyCommands(true, blueRobotCommands[time], time);
-            }
-        }
-
-        if (status->has_world_state()) {
-            if (status->world_state().has_system_delay()) {
-                Command command(new amun::Command);
-                command->mutable_tracking()->set_system_delay(status->world_state().system_delay());
-                m_replayProcessor->handleCommand(command);
-            }
-            for (int i = 0;i<status->world_state().vision_frames_size();i++) {
-                auto vision = status->world_state().vision_frames(i);
-                QByteArray visionData(vision.ByteSize(), 0);
-                if (vision.SerializeToArray(visionData.data(), visionData.size())) {
-                    auto time = status->world_state().time();
-                    if (i < status->world_state().vision_frame_times_size()) {
-                        time = status->world_state().vision_frame_times(i);
-                    }
-                    m_replayProcessor->handleVisionPacket(visionData, time, "replay");
-                }
-            }
-            for (const auto &truth : status->world_state().reality()) {
-                QByteArray simulatorData(truth.ByteSize(), 0);
-                if (truth.SerializeToArray(simulatorData.data(), simulatorData.size())) {
-                    m_replayProcessor->handleSimulatorExtraVision(simulatorData);
-                }
-            }
-            m_replayProcessor->process(status->world_state().time());
-        }
+    if (m_enableTrackingReplay) {
+        m_trackingReplay->handleStatus(status);
     } else {
+        m_replayTimer->setTime(status->time(), 0);
         emit sendStatusForReplay(status);
     }
 }
@@ -648,10 +594,6 @@ void Amun::handleStatusForReplay(const Status &status)
 void Amun::handleReplayStatus(const Status &status)
 {
     status->set_time(m_replayTimer->currentTime());
-    if (m_trackingReplay && !m_lastTrackingReplayGameState.isNull()) {
-        // add game state information since the replay processor does not have the required data
-        status->mutable_game_state()->CopyFrom(m_lastTrackingReplayGameState->game_state());
-    }
     m_seshat->handleReplayStatus(status);
 }
 
