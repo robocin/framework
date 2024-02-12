@@ -722,8 +722,10 @@ int main(int argc, char* argv[])
 
     auto* teamBlue = c->mutable_set_team_blue();
     auto* teamYellow = c->mutable_set_team_yellow();
+    QString chosenConfig = parser.value(geometryConfig);
+    int totalNumRobots = chosenConfig == "2020B" ? 6 : 11;
     for(auto* team : {teamBlue, teamYellow}) {
-        for(int i=0; i < 6; ++i){
+        for(int i=0; i < totalNumRobots; ++i){
             auto* robot = team->add_robot();
             robot->CopyFrom(ERForce);
             robot->set_id(i);
