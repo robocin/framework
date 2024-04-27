@@ -669,7 +669,7 @@ int main(int argc, char* argv[])
     parser.setApplicationDescription("ER-Force simulator command line interface");
     parser.addHelpOption();
 
-    QCommandLineOption geometryConfig({"g", "geometry"}, "The geometry file to load as default", "file", "2020B");
+    QCommandLineOption geometryConfig({"g", "geometry"}, "The geometry file to load as default", "file", "2023EL");
     QCommandLineOption realismConfig("realism", "Simulator realism configuration (short file name without the .txt)", "realism", "Realistic");
     parser.addOption(geometryConfig);
     parser.addOption(realismConfig);
@@ -723,7 +723,7 @@ int main(int argc, char* argv[])
     auto* teamBlue = c->mutable_set_team_blue();
     auto* teamYellow = c->mutable_set_team_yellow();
     QString chosenConfig = parser.value(geometryConfig);
-    int totalNumRobots = chosenConfig == "2020B" ? 6 : 11;
+    int totalNumRobots = chosenConfig == "2023EL" ? 3 : 11;
     for(auto* team : {teamBlue, teamYellow}) {
         for(int i=0; i < totalNumRobots; ++i){
             auto* robot = team->add_robot();
