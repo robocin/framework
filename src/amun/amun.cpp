@@ -266,7 +266,7 @@ void Amun::start()
         connect(m_referee, &Receiver::gotPacket, m_processor, &Processor::handleRefereePacket);
 
         // create vision
-        setupReceiver(m_vision, QHostAddress(SSL_VISION_ADDRESS), SSL_VISION_PORT);
+        setupReceiver(m_vision, QHostAddress(SSL_VISION_ADDRESS), SSL_SIMULATED_VISION_PORT);
         // allow updating the port used to listen for ssl vision
         connect(this, &Amun::updateVisionPort, m_vision, &Receiver::updatePort);
         // vision is connected in setSimulatorEnabled

@@ -697,7 +697,7 @@ int main(int argc, char* argv[])
     Timer timer;
     RobotCommandAdaptor blue{true, &timer}, yellow{false, &timer};
     SimProxy sim{&timer};
-    SSLVisionServer vision{SSL_VISION_PORT};
+    SSLVisionServer vision{SSL_SIMULATED_VISION_PORT};
     SimulatorCommandAdaptor commands{&timer, &vision};
 
     blue.connect(&blue, &RobotCommandAdaptor::sendRadioCommands, &sim, &SimProxy::handleRadioCommands);
