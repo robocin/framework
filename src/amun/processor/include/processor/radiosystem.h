@@ -18,21 +18,23 @@
  *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
-#ifndef TRANSCEIVER_H
-#define TRANSCEIVER_H
+#ifndef RADIOSYSTEM_H
+#define RADIOSYSTEM_H
 
 #include "protobuf/command.h"
 #include "protobuf/status.h"
+#include "radio_address.h"
 
 #include <QMap>
 #include <QPair>
+#include <array>
 
 class QTimer;
 class Timer;
+class TransceiverLayer;
 class USBThread;
-class USBDevice;
 
-class Transceiver : public QObject
+class RadioSystem : public QObject
 {
     Q_OBJECT
 
@@ -48,17 +50,9 @@ private:
             droppedFramesRatio(0), lastDroppedFrames(-1) {}
     };
 
-    enum class State {
-        DISCONNECTED,
-        HANDSHAKE,
-        CONNECTED
-    };
-
 public:
-    explicit Transceiver(const Timer *timer);
-    ~Transceiver() override;
-    Transceiver(const Transceiver&) = delete;
-    Transceiver& operator=(const Transceiver&) = delete;
+    explicit RadioSystem(const Timer *timer);
+    ~RadioSystem();
 
 signals:
     void sendStatus(const Status &status);
@@ -70,50 +64,40 @@ public slots:
 
 private slots:
     void process();
-    void receive();
+    void transceiverErrorOccurred(const QString &transceiverName, const QString &errorMsg, qint64 restartDelayInNs);
+    void transceiverResponded(const QString &transceiverName);
     void timeout();
+    void onRawRadioResponse(qint64 receiveTime, const QList<QByteArray> &rawResponses);
 
 private:
-    void open();
+    void openTransceiver();
+    void closeTransceiver();
     bool ensureOpen();
-    void close(const QString &errorMsg = QString(), qint64 restartDelayInNs = 0);
-    bool write(const char *data, qint64 size);
 
-    void handleInitPacket(const char *data, uint size);
-    void handlePingPacket(const char *data, uint size);
-    void handleStatusPacket(const char *data, uint size);
-    void handleDatagramPacket(const char *data, uint size);
-    float calculateDroppedFramesRatio(uint generation, uint id, uint8_t counter, int skipedFrames);
+    bool anyTransceiverPresent() const;
+    bool areAllTransceiversOpen() const;
+    bool callOpenOnAllTransceivers();
+
+    float calculateDroppedFramesRatio(Radio::Generation generation, uint id, uint8_t counter, int skipedFrames);
     void handleResponsePacket(QList<robot::RadioResponse> &response, const char *data, uint size, qint64 time);
     void handleTeam(const robot::Team &team);
 
-    void sendInitPacket();
-    void sendTransceiverConfiguration();
+    void addRobot2014Command(int id, const robot::Command &command, bool charge, quint8 packetCounter);
+    void addRobot2014Sync(qint64 processingDelay, quint8 packetCounter);
 
-    void addRobot2014Command(int id, const robot::Command &command, bool charge, quint8 packetCounter, QByteArray &usb_packet);
-    void addRobot2014Sync(qint64 processingDelay, quint8 packetCounter, QByteArray &usb_packet);
+    void addRobotPastaCommand(int id, const robot::Command &command, bool charge, quint8 packetCounter, qint64 processingDelay);
 
-    // for now the 2018 functions mostly copy paste of the 2014 functions
-    void addRobot2018Command(int id, const robot::Command &command, bool charge, quint8 packetCounter, QByteArray &usb_packet);
-    void addRobot2018Sync(qint64 processingDelay, quint8 packetCounter, QByteArray &usb_packet);
-
-    void addPingPacket(qint64 time, QByteArray &usb_packet);
-    void addStatusPacket(QByteArray &usb_packet);
     void sendCommand(const QList<robot::RadioCommand> &commands, bool charge, qint64 processingStart);
 
 private:
     bool m_charge;
-    amun::TransceiverConfiguration m_configuration;
-    QMap<QPair<uint, uint>, DroppedFrameCounter> m_droppedFrames;
-    QMap<QPair<uint, uint>, uint> m_ir_param;
+    QMap<QPair<Radio::Generation, uint>, DroppedFrameCounter> m_droppedFrames;
+    QMap<QPair<Radio::Generation, uint>, uint> m_ir_param;
     QMap<quint8, qint64> m_frameTimes;
 
     quint8 m_packetCounter;
-    USBThread *m_context;
-    USBDevice *m_device;
     QTimer *m_timeoutTimer;
     QTimer *m_processTimer;
-    State m_connectionState;
     bool m_simulatorEnabled;
     qint64 m_onlyRestartAfterTimestamp;
 
@@ -121,6 +105,15 @@ private:
     QList<robot::RadioCommand> m_commands;
     qint64 m_processingStart;
     int m_droppedCommands;
+
+    /** TransceiverLayer for two generations.
+     *
+     * Thus, the first index is used to select the generation. The second index
+     * is used to select one of two transceivers.
+     */
+    std::array<std::vector<std::unique_ptr<TransceiverLayer>>, 2> m_transceivers;
+
+    USBThread *m_context = nullptr;
 };
 
-#endif // TRANSCEIVER_H
+#endif // RADIOSYSTEM_H

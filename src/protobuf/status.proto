@@ -74,6 +74,7 @@ message StatusTransceiver {
     optional string error = 2;
     optional int32 dropped_usb_packets = 3;
     optional int32 dropped_commands = 4;
+    optional string name = 5;
 }
 
 message PortBindError {
@@ -158,6 +159,7 @@ message UiResponse {
     optional string requested_log_uid = 11;
     optional logfile.LogOffer log_offers = 12;
     optional string log_uid_parser_error = 13;
+    optional string log_open_error = 14;
 }
 
 message LoggingInfo {

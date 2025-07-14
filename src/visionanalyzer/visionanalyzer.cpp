@@ -25,6 +25,7 @@
 #include "protobuf/ssl_wrapper.pb.h"
 
 #include "tracking/tracker.h"
+#include "tracking/worldparameters.h"
 #include "strategy/strategy.h"
 #include "strategy/strategyreplayhelper.h"
 #include "strategy/script/compilerregistry.h"
@@ -79,7 +80,8 @@ int main(int argc, char* argv[])
     qint64 receiveTimeNanos = packet.first;
     VisionLog::MessageType msg_type = packet.second;
 
-    Tracker tracker(false, false);
+    WorldParameters worldParameters { false, true };
+    Tracker tracker(false, false, &worldParameters);
     tracker.reset();
 
     Timer* timer = new Timer;
@@ -132,11 +134,14 @@ int main(int argc, char* argv[])
                 //std::cerr << "enque packet" << counter << "(" << (counter-first_frame) << ")" <<std::endl;
                 // collect all packets until current system time
                 if (msg_type == VisionLog::MessageType::MESSAGE_SSL_VISION_2014) {
-                    tracker.queuePacket(visionFrame, receiveTimeNanos, "logfile");
+                    SSL_WrapperPacket wrapper;
+                    if (wrapper.ParseFromArray(visionFrame.data(), visionFrame.size()) && wrapper.has_detection()) {
+                        tracker.queuePacket(wrapper.detection(), receiveTimeNanos);
+                    }
                 } else if (msg_type == VisionLog::MessageType::MESSAGE_SSL_REFBOX_2013) {
                     ref.handlePacket(visionFrame, SENDER_NAME_FOR_REFEREE);
                     if (ref.getFlipped() != lastFlipped) {
-                        tracker.setFlip(ref.getFlipped());
+                        worldParameters.setFlip(ref.getFlipped());
                         lastFlipped = ref.getFlipped();
                     }
                 }
@@ -153,8 +158,10 @@ int main(int argc, char* argv[])
 
         timer->setTime(systemTimeNanos, 1.0); // update timer for strategy
 
-        Status status = tracker.worldState(systemTimeNanos, true);
+        Status status { new amun::Status };
         status->set_time(systemTimeNanos);
+
+        tracker.worldState(status->mutable_world_state(), systemTimeNanos, true);
 
         ref.process(status->world_state());
         status->mutable_game_state()->CopyFrom(ref.gameState());

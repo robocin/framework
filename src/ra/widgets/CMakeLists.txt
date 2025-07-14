@@ -19,6 +19,7 @@
 # ***************************************************************************
 
 add_library(widgets STATIC
+    include/widgets/automaticentrypointsstorage.h
     include/widgets/debuggerconsole.h
     include/widgets/debugwidget.h
     include/widgets/fieldwidget.h
@@ -31,12 +32,16 @@ add_library(widgets STATIC
     include/widgets/teamwidget.h
     include/widgets/replayteamwidget.h
 
+    automaticentrypointdialog.h
+    automaticentrypointdialog.cpp
     debuggerconsole.cpp
     debugmodel.cpp
     debugmodel.h
     debugtreewidget.cpp
     debugtreewidget.h
     debugwidget.cpp
+    entrypointselectiontoolbutton.h
+    entrypointselectiontoolbutton.cpp
     fieldwidget.cpp
     goalselectionwidget.h
     goalselectionwidget.cpp
@@ -56,6 +61,7 @@ add_library(widgets STATIC
 )
 
 set(UI_SOURCES
+    automaticentrypointdialog.ui
     debugwidget.ui
     logslider.ui
     refereestatuswidget.ui

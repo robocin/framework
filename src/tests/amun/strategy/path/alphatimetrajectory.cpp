@@ -22,6 +22,10 @@
 #include <iostream>
 #include "path/alphatimetrajectory.h"
 #include "core/rng.h"
+#include "util.h"
+
+static const float REL_ERROR = 1e-7;
+static const float ABS_ERROR = 1e-4;
 
 // tests both SpeedProfile and AlphaTimeTrajectory
 
@@ -30,16 +34,13 @@ static Vector makePos(RNG &rng, float fieldSizeHalf) {
 }
 
 static Vector makeSpeed(RNG &rng, float maxSpeed) {
-    Vector v = rng.uniformVector() * maxSpeed - rng.uniformVector() * maxSpeed;
+    Vector v = rng.uniformVector() * maxSpeed;
+    v = v - rng.uniformVector() * maxSpeed;
     while (v.length() >= maxSpeed) {
-        v = rng.uniformVector() * maxSpeed - rng.uniformVector() * maxSpeed;
+        v = rng.uniformVector() * maxSpeed;
+        v = v - rng.uniformVector() * maxSpeed;
     }
     return v;
-}
-
-static void ASSERT_VECTOR_EQ(Vector v1, Vector v2) {
-    ASSERT_LE(std::abs(v1.x - v2.x), 0.0001f);
-    ASSERT_LE(std::abs(v1.y - v2.y), 0.0001f);
 }
 
 // checks without fast endspeed and without slowdown
@@ -47,12 +48,12 @@ static void ASSERT_VECTOR_EQ(Vector v1, Vector v2) {
 static void checkTrajectorySimple(const Trajectory &trajectory, Vector v0, Vector v1, float acc, EndSpeed endSpeedType) {
 
     // check start speed
-    ASSERT_VECTOR_EQ(trajectory.stateAtTime(0).speed, v0);
+    ASSERT_VECTOR_APPROX_EQ(trajectory.stateAtTime(0).speed, v0, REL_ERROR, ABS_ERROR);
 
     // check end speed
     if (endSpeedType == EndSpeed::EXACT) {
-        ASSERT_VECTOR_EQ(trajectory.stateAtTime(trajectory.time()).speed, v1);
-        ASSERT_VECTOR_EQ(trajectory.endSpeed(), v1);
+        ASSERT_VECTOR_APPROX_EQ(trajectory.stateAtTime(trajectory.endTime()).speed, v1, REL_ERROR, ABS_ERROR);
+        ASSERT_VECTOR_APPROX_EQ(trajectory.endSpeed(), v1, REL_ERROR, ABS_ERROR);
     } else {
         ASSERT_LE(trajectory.endSpeed().length(), v1.length());
     }
@@ -60,7 +61,7 @@ static void checkTrajectorySimple(const Trajectory &trajectory, Vector v0, Vecto
     // TODO: test that end pos calculation matches
 
     const int SEGMENTS = 100;
-    const float timeDiff = trajectory.time() / float(SEGMENTS - 1);
+    const float timeDiff = trajectory.endTime() / float(SEGMENTS - 1);
     const auto bulkPositions = trajectory.trajectoryPositions(SEGMENTS, timeDiff, 0.0f);
 
     // TODO: test t0
@@ -104,7 +105,7 @@ static void checkMaxSpeed(const Trajectory &trajectory, float maxSpeed) {
 
     const int SEGMENTS = 100;
     for (int i = 0;i<SEGMENTS;i++) {
-        const float time = i * trajectory.time() / float(SEGMENTS - 1);
+        const float time = i * trajectory.endTime() / float(SEGMENTS - 1);
         const Vector speed = trajectory.stateAtTime(time).speed;
 
         ASSERT_LE(speed.length(), maxSpeed * MAX_FASTER_FACTOR);
@@ -112,7 +113,7 @@ static void checkMaxSpeed(const Trajectory &trajectory, float maxSpeed) {
 }
 
 static void checkBoundingBox(const Trajectory &trajectory) {
-    const auto manyPositions = trajectory.trajectoryPositions(1000, trajectory.time() / 999, 0.0f);
+    const auto manyPositions = trajectory.trajectoryPositions(1000, trajectory.endTime() / 999, 0.0f);
     BoundingBox fromPoints(manyPositions[0].state.pos, manyPositions[0].state.pos);
     for (const auto &p : manyPositions) {
         fromPoints.mergePoint(p.state.pos);
@@ -126,18 +127,18 @@ static void checkBoundingBox(const Trajectory &trajectory) {
 }
 
 static void checkEndPosition(const Trajectory &trajectory, const Vector expected) {
-    const float time = trajectory.time();
+    const float time = trajectory.endTime();
     {
         const Vector endPos = trajectory.endPosition();
-        ASSERT_VECTOR_EQ(endPos, expected);
+        ASSERT_VECTOR_APPROX_EQ(endPos, expected, REL_ERROR, ABS_ERROR);
     }
     {
         const Vector endPos = trajectory.stateAtTime(time).pos;
-        ASSERT_VECTOR_EQ(endPos, expected);
+        ASSERT_VECTOR_APPROX_EQ(endPos, expected, REL_ERROR, ABS_ERROR);
     }
     {
         const Vector endPos = trajectory.stateAtTime(time + 1.0f).pos;
-        ASSERT_VECTOR_EQ(endPos, expected);
+        ASSERT_VECTOR_APPROX_EQ(endPos, expected, REL_ERROR, ABS_ERROR);
     }
     {
         const int steps = 20;
@@ -146,27 +147,27 @@ static void checkEndPosition(const Trajectory &trajectory, const Vector expected
         const float timeStep = time / (float)(steps - 1);
         const auto states = trajectory.trajectoryPositions(totalSteps, timeStep, 0.0f);
         for (int i = steps; i < totalSteps; i++) {
-            ASSERT_VECTOR_EQ(states[i].state.pos, expected);
+            ASSERT_VECTOR_APPROX_EQ(states[i].state.pos, expected, REL_ERROR, ABS_ERROR);
         }
     }
 
     const float offset = 1e-6;
     const auto closeToEnd = trajectory.stateAtTime(time - offset);
-    ASSERT_VECTOR_EQ(closeToEnd.pos, expected - closeToEnd.speed * offset);
+    ASSERT_VECTOR_APPROX_EQ(closeToEnd.pos, expected - closeToEnd.speed * offset, REL_ERROR, ABS_ERROR);
 }
 
 static void checkLimitToTime(const Trajectory &profile, RNG &rng) {
-    const float timeLimit = rng.uniformFloat(profile.time() * 0.1f, profile.time());
+    const float timeLimit = rng.uniformFloat(profile.endTime() * 0.1f, profile.endTime());
     Trajectory limited = profile;
     limited.limitToTime(timeLimit);
-    ASSERT_FLOAT_EQ(limited.time(), timeLimit);
+    ASSERT_FLOAT_EQ(limited.endTime(), timeLimit);
     for (int i = 0;i<100;i++) {
         const float t = i * timeLimit / 99.0f;
         const auto sp1 = profile.stateAtTime(t);
         const auto sp2 = limited.stateAtTime(t);
 
-        ASSERT_VECTOR_EQ(sp1.pos, sp2.pos);
-        ASSERT_VECTOR_EQ(sp1.speed, sp2.speed);
+        ASSERT_VECTOR_APPROX_EQ(sp1.pos, sp2.pos, REL_ERROR, ABS_ERROR);
+        ASSERT_VECTOR_APPROX_EQ(sp1.speed, sp2.speed, REL_ERROR, ABS_ERROR);
     }
 }
 
@@ -190,9 +191,10 @@ static void checkBasic(RNG &rng, const Trajectory &profile, const Vector v0, con
 }
 
 TEST(AlphaTimeTrajectory, calculateTrajectory) {
-    RNG rng(1);
+    constexpr int RUNS = 10'000;
 
-    for (int i = 0;i<10000;i++) {
+    for (int i = 0; i < RUNS; i++) {
+        RNG rng(i + 1);
 
         const float maxSpeed = rng.uniformFloat(0.3, 5);
 
@@ -242,6 +244,50 @@ TEST(AlphaTimeTrajectory, findTrajectory) {
     }
 
     ASSERT_LT((float)fails / RUNS, 0.01f);
+}
+
+// there is a invariant, that must always be kept: that calculatePosition
+// always returns the end position of calculateTrajectory, because its
+// just a performance optimization used in the search (findTrajectory)
+TEST(AlphaTimeTrajectory, calculateTrajectoryPositionInvariant) {
+    constexpr int RUNS = 10'000;
+
+    for (int i = 0; i < RUNS; i++) {
+        RNG rng(i + 1);
+
+        const float maxSpeed = rng.uniformFloat(0.3, 5);
+
+        const Vector s0 = makePos(rng, 2);
+        const Vector v0 = makeSpeed(rng, maxSpeed);
+        const RobotState start{s0, v0};
+
+        const Vector v1 = rng.uniform() > 0.9 ? Vector(0, 0) : makeSpeed(rng, maxSpeed);
+        const float time = rng.uniformFloat(0.005, 5);
+        const float angle = rng.uniformFloat(0, 2 * M_PI);
+        const float acc = rng.uniformFloat(0.5, 4);
+        const float useSlowDown = rng.uniform() > 0.5;
+        const float slowDown = useSlowDown ? rng.uniformFloat(0, SlowdownAcceleration::SLOW_DOWN_TIME) : 0;
+        const EndSpeed endSpeedType = rng.uniform() > 0.5 ? EndSpeed::EXACT : EndSpeed::FAST;
+
+        const auto profile = AlphaTimeTrajectory::calculateTrajectory(start, v1, time, angle, acc, maxSpeed, slowDown, endSpeedType);
+        const auto posInfo = AlphaTimeTrajectory::calculatePosition(start, v1, time, angle, acc, maxSpeed, endSpeedType);
+
+        const auto trajEndPos = profile.endPosition();
+        const auto infoEndPos = posInfo.endPos;
+
+        // the error values for slowdown are really large, but calculatePosition
+        // has no knowledge of the slowdown, and in that case it suffices, that its
+        // just an approximation
+        const float relError = useSlowDown ? 0.2 : REL_ERROR;
+        const float absError = useSlowDown ? 0.35 : ABS_ERROR;
+
+        ASSERT_VECTOR_APPROX_EQ(trajEndPos, infoEndPos, relError, absError);
+
+        if (useSlowDown && endSpeedType == EndSpeed::EXACT) {
+            // check that the speed is in the same direction as the position error
+            ASSERT_LT(abs(v1.perpendicular().dot(infoEndPos - trajEndPos)), 1e-1);
+        }
+    }
 }
 
 // TODO: test total time

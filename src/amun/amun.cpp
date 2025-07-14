@@ -27,10 +27,12 @@
 #include "core/sslprotocols.h"
 #include "processor/processor.h"
 #include "processor/trackingreplay.h"
-#include "processor/transceiver.h"
+#include "processor/radiosystem.h"
 #include "processor/networktransceiver.h"
 #include "processor/integrator.h"
 #include "protobuf/geometry.h"
+#include "protobuf/ssl_geometry.pb.h"
+#include "protobuf/world.pb.h"
 #include "simulator/simulator.h"
 #include "strategy/script/debughelper.h"
 #include "strategy/strategyreplayhelper.h"
@@ -66,7 +68,7 @@ using namespace camun::simulator;
 Amun::Amun(bool simulatorOnly, QObject *parent) :
     QObject(parent),
     m_processor(nullptr),
-    m_transceiver(nullptr),
+    m_radio(nullptr),
     m_networkTransceiver(nullptr),
     m_simulator(nullptr),
     m_referee(nullptr),
@@ -98,6 +100,8 @@ Amun::Amun(bool simulatorOnly, QObject *parent) :
     qRegisterMetaType<camun::simulator::ErrorSource>("ErrorSource");
     qRegisterMetaType<camun::simulator::ErrorSource>("camun::simulator::ErrorSource");
     qRegisterMetaType<amun::CommandReferee>("amun::CommandReferee");
+    qRegisterMetaType<SSL_GeometryCameraCalibration>("SSL_GeometryCameraCalibration");
+    qRegisterMetaType<world::BallModel>("world::BallModel");
 
     for (int i = 0; i < 3; ++i) {
         m_strategy[i] = nullptr;
@@ -117,13 +121,41 @@ Amun::Amun(bool simulatorOnly, QObject *parent) :
     // these threads just run an event loop
     // using the signal-slot mechanism the objects in these can be called
     m_processorThread = new QThread(this);
-    m_transceiverThread = new QThread(this);
+    m_processorThread->setObjectName("Processor Thread");
+
+    m_radioThread = new QThread(this);
+    m_radioThread->setObjectName("Radio Thread");
+
     m_networkThread = new QThread(this);
+    m_networkThread->setObjectName("Network Thread");
+
     m_simulatorThread = new QThread(this);
+    m_simulatorThread->setObjectName("Simulator Thread");
     for (int i = 0;i<5;i++) {
+        const auto name = [i](){
+          switch(i) {
+              case 0:
+                  return "Strategy Blue Thread";
+              case 1:
+                  return "Strategy Yellow Thread";
+              case 2:
+                  return "AutoRef Thread";
+              case 3:
+                  return "ReplayStrategy Blue Thread";
+              case 4:
+                  return "ReplayStrategy Yellow Thread";
+              default:
+                  std::cerr << "Unknown strategy thread id found" << std::endl;
+                  return "UnknownStrategy Thread";
+          }
+        }();
+
         m_strategyThread[i] = new QThread(this);
+        m_strategyThread[i]->setObjectName(name);
     }
+
     m_debugHelperThread = new QThread(this);
+    m_debugHelperThread->setObjectName("Debug Helper Thread");
 
     m_networkInterfaceWatcher = (!m_simulatorOnly) ? new NetworkInterfaceWatcher(this) : nullptr;
 
@@ -131,6 +163,7 @@ Amun::Amun(bool simulatorOnly, QObject *parent) :
     m_pathInputSaver[1].reset(new ProtobufFileSaver("pathinput-yellow.pathlog", "KHONSU PATHFINDING LOG", this));
 
     m_gitRecorderThread = new QThread(this);
+    m_gitRecorderThread->setObjectName("Git Recorder Thread");
 }
 
 /*!
@@ -288,19 +321,19 @@ void Amun::start()
     connect(m_processor->getInternalGameController(), &InternalGameController::sendCommand, this, &Amun::handleCommand);
 
     if (!m_simulatorOnly) {
-        Q_ASSERT(m_transceiver == nullptr);
-        m_transceiver = new Transceiver(m_timer);
-        m_transceiver->moveToThread(m_transceiverThread);
-        connect(m_transceiverThread, SIGNAL(finished()), m_transceiver, SLOT(deleteLater()));
+        Q_ASSERT(m_radio == nullptr);
+        m_radio = new RadioSystem(m_timer);
+        m_radio->moveToThread(m_radioThread);
+        connect(m_radioThread, &QThread::finished, m_radio, &RadioSystem::deleteLater);
         // route commands to transceiver
-        connect(this, SIGNAL(gotCommand(Command)), m_transceiver, SLOT(handleCommand(Command)));
+        connect(this, &Amun::gotCommand, m_radio, &RadioSystem::handleCommand);
         // relay transceiver status and timing
-        connect(m_transceiver, SIGNAL(sendStatus(Status)), SLOT(handleStatus(Status)));
+        connect(m_radio, &RadioSystem::sendStatus, this, &Amun::handleStatus);
 
         Q_ASSERT(m_networkTransceiver == nullptr);
         m_networkTransceiver = new NetworkTransceiver(m_timer);
-        m_networkTransceiver->moveToThread(m_transceiverThread);
-        connect(m_transceiverThread, SIGNAL(finished()), m_networkTransceiver, SLOT(deleteLater()));
+        m_networkTransceiver->moveToThread(m_radioThread);
+        connect(m_radioThread, &QThread::finished, m_networkTransceiver, &NetworkTransceiver::deleteLater);
         // route commands to transceiver
         connect(this, SIGNAL(gotCommand(Command)), m_networkTransceiver, SLOT(handleCommand(Command)));
         // relay transceiver status and timing
@@ -314,7 +347,7 @@ void Amun::start()
 
     // start threads
     m_processorThread->start();
-    m_transceiverThread->start();
+    m_radioThread->start();
     m_networkThread->start();
     m_simulatorThread->start();
     for (int i = 0;i<5;i++) {
@@ -333,7 +366,7 @@ void Amun::stop()
 {
     // stop threads
     m_processorThread->quit();
-    m_transceiverThread->quit();
+    m_radioThread->quit();
     m_networkThread->quit();
     m_simulatorThread->quit();
     for (int i = 0;i<5;i++) {
@@ -343,7 +376,7 @@ void Amun::stop()
 
     // wait for threads
     m_processorThread->wait();
-    m_transceiverThread->wait();
+    m_radioThread->wait();
     m_networkThread->wait();
     m_simulatorThread->wait();
     for (int i = 0;i<3;i++) {
@@ -358,7 +391,7 @@ void Amun::stop()
     delete m_optionsManager;
 
     // worker objects are destroyed on thread shutdown
-    m_transceiver = nullptr;
+    m_radio = nullptr;
     m_networkTransceiver = nullptr;
     m_simulator = nullptr;
     m_vision = nullptr;
@@ -619,14 +652,14 @@ void Amun::setSimulatorEnabled(bool enabled, bool useNetworkTransceiver)
     if (!m_simulatorOnly) {
         m_vision->disconnect(m_processor);
         m_networkTransceiver->disconnect(m_processor);
-        m_transceiver->disconnect(m_processor);
+        m_radio->disconnect(m_processor);
     }
 
     // remove radio command connections
     m_processor->disconnect(m_commandConverter);
     m_commandConverter->disconnect(m_simulator);
     if (!m_simulatorOnly) {
-        m_processor->disconnect(m_transceiver);
+        m_processor->disconnect(m_radio);
         m_commandConverter->disconnect(m_networkTransceiver);
         m_networkTransceiver->setSendCommands(false);
     }
@@ -650,8 +683,8 @@ void Amun::setSimulatorEnabled(bool enabled, bool useNetworkTransceiver)
         }
     } else {
         // field setup
-        connect(m_processor, SIGNAL(sendRadioCommands(QList<robot::RadioCommand>,qint64)),
-                m_transceiver, SLOT(handleRadioCommands(QList<robot::RadioCommand>,qint64)));
+        connect(m_processor, &Processor::sendRadioCommands,
+                m_radio, &RadioSystem::handleRadioCommands);
     }
 
     // setup connection for simulator errors
@@ -677,11 +710,11 @@ void Amun::setSimulatorEnabled(bool enabled, bool useNetworkTransceiver)
         connect(m_simulator, SIGNAL(sendRadioResponses(QList<robot::RadioResponse>)),
                 m_processor, SLOT(handleRadioResponses(QList<robot::RadioResponse>)));
     } else {
-        QObject* transceiver = m_transceiver;
+        QObject* radio = m_radio;
         if (useNetworkTransceiver) {
-            transceiver = m_networkTransceiver;
+            radio = m_networkTransceiver;
         }
-        connect(transceiver, SIGNAL(sendRadioResponses(QList<robot::RadioResponse>)),
+        connect(radio, SIGNAL(sendRadioResponses(QList<robot::RadioResponse>)),
                 m_processor, SLOT(handleRadioResponses(QList<robot::RadioResponse>)));
     }
 }

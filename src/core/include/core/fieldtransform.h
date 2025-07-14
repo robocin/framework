@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright 2020 Andreas Wendler                                        *
+ *   Copyright 2025 Andreas Wendler, Paul Bergmann                         *
  *   Robotics Erlangen e.V.                                                *
  *   http://www.robotics-erlangen.de/                                      *
  *   info@robotics-erlangen.de                                             *
@@ -24,12 +24,23 @@
 #include <array>
 #include <QPointF>
 
+/*! \brief Transforms (scaling, translation) for the field.
+ */
 class FieldTransform
 {
 public:
+    /*! \brief Constructs an identity transform.
+     */
     FieldTransform();
+
+    /*! \brief Sets whether both axis should be flipped in addition to the
+     * transformation.
+     *
+     * \param flip Whether to flip the axes.
+     */
     void setFlip(bool flip);
     void setTransform(const std::array<float, 6> &values);
+    void resetTransform();
     float applyPosX(float x, float y) const;
     float applyPosY(float x, float y) const;
     QPointF applyPosition(const QPointF &pos) const;

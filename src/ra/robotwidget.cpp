@@ -35,7 +35,6 @@ RobotWidget::RobotWidget(InputManager *inputManager, bool is_generation, QWidget
     m_isGeneration(is_generation),
     m_statusCtr(0),
     m_lastBatteryLevel(0),
-    m_smoothedBatteryLevel(0),
     m_inputManager(inputManager),
     m_strategyControlled(false)
 {
@@ -497,16 +496,12 @@ void RobotWidget::updateTemperatureStatus(int temperature)
 
 void RobotWidget::updateRobotStatus()
 {
+    // update battery data
     if (m_mergedResponse.has_battery() && m_mergedResponse.has_packet_loss_rx() && m_mergedResponse.has_packet_loss_tx()) {
-        // smooth and update battery data
-        const float alpha = 0.05f;
-        if (m_statusCtr == 0) {
-            m_smoothedBatteryLevel = m_mergedResponse.battery();
-        } else {
-            m_smoothedBatteryLevel = alpha * m_mergedResponse.battery() + (1-alpha) * m_smoothedBatteryLevel;
-        }
-        updateBatteryStatus(std::ceil(m_smoothedBatteryLevel * 100));
+        updateBatteryStatus(std::ceil(m_mergedResponse.battery() * 100));
+    }
 
+    if (m_mergedResponse.has_packet_loss_rx() && m_mergedResponse.has_packet_loss_tx()) {
         // update radio status if changed
         if (!m_lastResponse.IsInitialized() || m_lastResponse.packet_loss_rx() != m_mergedResponse.packet_loss_rx()
                 || m_lastResponse.packet_loss_tx() != m_mergedResponse.packet_loss_tx()) {
@@ -530,13 +525,13 @@ void RobotWidget::updateRobotStatus()
     if (m_mergedResponse.has_extended_error()) {
         const auto &extendedError = m_mergedResponse.extended_error();
 
-        m_motorVLError->setVisible(extendedError.motor_1_error());
-        m_motorHLError->setVisible(extendedError.motor_2_error());
-        m_motorHRError->setVisible(extendedError.motor_3_error());
-        m_motorVRError->setVisible(extendedError.motor_4_error());
-        m_motorDribblerError->setVisible(extendedError.dribbler_error());
-        m_kickerError->setVisible(extendedError.kicker_error());
-        m_breakBeamError->setVisible(extendedError.kicker_break_beam_error());
+        turnOnErrorLabel(m_motorVLError, extendedError.motor_1_error());
+        turnOnErrorLabel(m_motorHLError, extendedError.motor_2_error());
+        turnOnErrorLabel(m_motorHRError, extendedError.motor_3_error());
+        turnOnErrorLabel(m_motorVRError, extendedError.motor_4_error());
+        turnOnErrorLabel(m_motorDribblerError, extendedError.dribbler_error());
+        turnOnErrorLabel(m_kickerError, extendedError.kicker_error());
+        turnOnErrorLabel(m_breakBeamError, extendedError.kicker_break_beam_error());
 
         QString errorMsg = "";
         if (extendedError.motor_encoder_error()) {
@@ -587,5 +582,18 @@ void RobotWidget::generationChanged(uint generation, RobotWidget::Team team)
 {
     if (generation == m_specs.generation()) {
         selectTeam(team);
+    }
+}
+
+constexpr size_t ERROR_TIMEOUT = 1000; // ms
+void RobotWidget::turnOnErrorLabel(QLabel *label, const bool value) {
+    if (value) {
+        label->setVisible(value);
+        if (!m_errorLabelTimer.contains(label)) {
+            m_errorLabelTimer.insert(label, new QTimer(this));
+            const auto* timer = m_errorLabelTimer[label];
+            connect(timer, &QTimer::timeout, label, &QLabel::hide);
+        }
+        m_errorLabelTimer[label]->start(ERROR_TIMEOUT);
     }
 }

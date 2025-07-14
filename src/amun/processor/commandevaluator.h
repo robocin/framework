@@ -32,6 +32,8 @@ namespace world { class Robot; }
 class LocalSpeed;
 class GlobalSpeed;
 
+const float CONTROL_STEP = 0.01f;
+
 class CommandEvaluator
 {
     // no copy of this instance
@@ -49,9 +51,9 @@ public:
 
 private:
     static float robotToPhi(const world::Robot *robot);
-    GlobalSpeed evaluateInput(bool hasTrackedRobot, float robotPhi, qint64 worldTime, const robot::Command &command, amun::DebugValues *debug, bool drawSplines, bool hasManualCommand);
+    GlobalSpeed evaluateInput(bool hasTrackedRobot, float robotPhi, qint64 worldTime, const robot::Command &command, amun::DebugValues *debug, bool hasManualCommand);
     LocalSpeed evaluateLocalManualControl(const robot::Command &command);
-    GlobalSpeed evaluateManualControl(const robot::Command &command);
+    GlobalSpeed evaluateGlobalManualControl(const robot::Command &command);
     GlobalSpeed evaluateSplineAtTime(const qint64 worldTime);
     int findActiveSpline(const float time);
     GlobalSpeed evaluateSplinePartAtTime(const robot::Spline &spline, const float t);
@@ -59,9 +61,7 @@ private:
     void logInvalidCommand(amun::DebugValues *debug, qint64 worldTime);
     void drawSpline(amun::DebugValues *debug);
 
-    void prepareBaseSpeed(const world::Robot *robot, qint64 worldTime);
-    void updateBaseSpeed(qint64 worldTime, GlobalSpeed limitedOutput);
-    GlobalSpeed limitAcceleration(float robotPhi, const GlobalSpeed &command, const GlobalSpeed &baseSpeed, float timeStep, bool hasManualCommand);
+    GlobalSpeed limitAcceleration(float robotPhi, const GlobalSpeed &command, float timeStep, bool hasManualCommand);
     float boundAcceleration(float acceleration, float oldSpeed, float speedupLimit, float brakeLimit) const;
     void drawSpeed(const world::Robot *robot, const GlobalSpeed &output, amun::DebugValues *debug);
 

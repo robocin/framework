@@ -1,0 +1,23 @@
+{
+  "scripts": {
+    "lint": "eslint --config strategy/typescript/.eslintrc.js --ignore-path strategy/typescript/.eslintignore --ext .js,.ts strategy/typescript",
+    "lint-fix": "eslint --config strategy/typescript/.eslintrc.js --ignore-path strategy/typescript/.eslintignore --ext .js,.ts --fix strategy/typescript",
+    "lint-only": "eslint --config strategy/typescript/.eslintrc.js --ignore-path strategy/typescript/.eslintignore --ext .js,.ts",
+    "lint-fix-only": "eslint --config strategy/typescript/.eslintrc.js --ignore-path strategy/typescript/.eslintignore --ext .js,.ts --fix"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "5.26.0",
+    "@typescript-eslint/parser": "5.26.0",
+    "eslint": "^8.29.0",
+    "eslint-plugin-erforce": "file:tools/eslint-plugin-erforce",
+    "eslint-plugin-import": "^2.26.0",
+    "eslint-plugin-jsdoc": "^39.6.4",
+    "eslint-plugin-no-null": "^1.0.2",
+    "eslint-plugin-sonarjs": "^0.17.0",
+    "eslint-plugin-unicorn": "^45.0.1",
+    "typescript-eslint-language-service": "^5.0.0"
+  },
+  "dependencies": {
+    "typescript": "4.9.3"
+  }
+}

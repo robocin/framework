@@ -24,11 +24,12 @@
 
 LocalSpeed::LocalSpeed(float v_s, float v_f, float omega) : v_s(v_s), v_f(v_f), omega(omega) {}
 
-GlobalSpeed LocalSpeed::toGlobal(float phi) const {
-    // rotate ccw
-    const float v_x = std::cos(phi) * v_s - std::sin(phi) * v_f;
-    const float v_y = std::sin(phi) * v_s + std::cos(phi) * v_f;
-    return GlobalSpeed(v_x, v_y, omega);
+std::optional<LocalSpeed> LocalSpeed::fromSpeedVector(const robot::SpeedVector &vector) {
+    if (vector.has_v_s() && vector.has_v_f() && vector.omega()) {
+        return LocalSpeed(vector.v_s(), vector.v_f(), vector.omega());
+    } else {
+        return {};
+    }
 }
 
 void LocalSpeed::copyToSpeedVector(robot::SpeedVector &vector) const {
@@ -37,8 +38,28 @@ void LocalSpeed::copyToSpeedVector(robot::SpeedVector &vector) const {
     vector.set_omega(omega);
 }
 
+GlobalSpeed LocalSpeed::toGlobal(float phi) const {
+    // rotate ccw
+    const float v_x = std::cos(phi) * v_s - std::sin(phi) * v_f;
+    const float v_y = std::sin(phi) * v_s + std::cos(phi) * v_f;
+    return GlobalSpeed(v_x, v_y, omega);
+}
 
 GlobalSpeed::GlobalSpeed(float v_x, float v_y, float omega) : v_x(v_x), v_y(v_y), omega(omega) {}
+
+std::optional<GlobalSpeed> GlobalSpeed::fromSpeedVector(const robot::SpeedVector &vector) {
+    if (vector.has_v_x() && vector.has_v_y() && vector.omega()) {
+        return GlobalSpeed(vector.v_x(), vector.v_y(), vector.omega());
+    } else {
+        return {};
+    }
+}
+
+void GlobalSpeed::copyToSpeedVector(robot::SpeedVector &vector) const {
+    vector.set_v_x(v_x);
+    vector.set_v_y(v_y);
+    vector.set_omega(omega);
+}
 
 LocalSpeed GlobalSpeed::toLocal(float phi) const {
     // rotate cw

@@ -7,6 +7,7 @@ import "logfile.proto";
 import "ssl_geometry.proto";
 import "ssl_simulation_control.proto";
 import "ssl_simulation_custom_erforce_realism.proto";
+import "ssl_referee.proto";
 
 package amun;
 
@@ -44,6 +45,14 @@ message CommandReferee {
     optional bool use_automatic_robot_exchange = 4;
 }
 
+message CommandStrategyAutomaticEntrypoints {
+    message EntrypointForStage {
+        required .SSL_Referee.Stage stage = 1;
+        required string entry_point = 2;
+    }
+    repeated EntrypointForStage mapping = 1;
+}
+
 message CommandStrategyLoad {
     required string filename = 1;
     optional string entry_point = 2;
@@ -66,6 +75,7 @@ message CommandStrategy {
     optional bool start_profiling = 8;
     optional string finish_and_save_profile = 9;
     optional bool tournament_mode = 10;
+    optional CommandStrategyAutomaticEntrypoints automatic_entrypoints = 11;
 }
 
 message CommandControl {
@@ -112,13 +122,14 @@ message VirtualFieldTransform {
 message CommandTracking {
     optional bool aoi_enabled = 1;
     optional world.TrackingAOI aoi = 2;
-    optional int64 system_delay = 3;
+    optional int64 vision_transmission_delay = 3;
     optional bool reset = 4;
     optional bool enable_virtual_field = 5;
     optional VirtualFieldTransform field_transform = 6;
     optional world.Geometry virtual_geometry = 7;
     optional bool tracking_replay_enabled = 8;
     optional world.BallModel ball_model = 9;
+    optional uint64 radio_command_delay = 10;
 }
 
 // the UI may not store the option state, therefore only single values will be changed (by hand)

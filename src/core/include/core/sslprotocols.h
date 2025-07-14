@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright 2021 Paul Bergmann                                          *
+ *   Copyright 2025 Paul Bergmann                                          *
  *   Robotics Erlangen e.V.                                                *
  *   http://www.robotics-erlangen.de/                                      *
  *   info@robotics-erlangen.de                                             *
@@ -23,18 +23,20 @@
 
 #include <cstdint>
 
-// See https://ssl.robocup.org/league-software/ "Standard Network Parameters"
+// See https://ssl.robocup.org/technical-overview-of-the-small-size-league/ "Standard Network Parameters"
 
 /* The game controller publishes referee commands using UDP multicast on this
  * address:port
  */
 constexpr const char* SSL_GAME_CONTROLLER_ADDRESS = "224.5.23.1";
+constexpr const char* SSL_GAME_CONTROLLER_ADDRESS_LOCALHOST = "127.0.0.1";
 constexpr const uint16_t SSL_GAME_CONTROLLER_PORT = 10003;
 
 /* SSL vision publishes vision detections using UDP multicast on this
  * address:port
  */
 constexpr const char* SSL_VISION_ADDRESS = "224.5.23.2";
+constexpr const char* SSL_VISION_ADDRESS_LOCALHOST = "127.0.0.1";
 constexpr const uint16_t SSL_VISION_PORT = 10006;
 
 /* A simulator will publish vision data using this port instead of
@@ -54,6 +56,7 @@ constexpr const uint16_t SSL_TEAM_TO_GC_PORT = 10008;
  * this address:port
  */
 constexpr const char* SSL_VISION_TRACKER_ADDRESS = "224.5.23.2";
+constexpr const char* SSL_VISION_TRACKER_ADDRESS_LOCALHOST = "127.0.0.1";
 constexpr const uint16_t SSL_VISION_TRACKER_PORT = 10010;
 
 /* A simulator will listen for simulation control commands (e.g ball

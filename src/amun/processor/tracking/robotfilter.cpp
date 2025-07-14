@@ -59,11 +59,6 @@ void RobotFilter::resetFutureKalman()
 {
     m_futureKalman = m_kalman;
     m_futureTime = m_lastTime;
-
-    m_futureKalman->H = Kalman::MatrixM::Zero();
-    m_futureKalman->H(0, 3) = 1.0;
-    m_futureKalman->H(1, 4) = 1.0;
-    m_futureKalman->H(2, 5) = 1.0;
 }
 
 // updates the filter to the best possible prediction for the given time
@@ -81,7 +76,7 @@ void RobotFilter::update(qint64 time)
             break;
         }
 
-        // only apply radio commands that have reached the robot yet
+        // only apply radio commands that have reached the robot before the vision frame we want to apply
         foreach (const RadioCommand &command, m_radioCommands) {
             const qint64 commandTime = command.second;
             if (commandTime > frame.time) {
@@ -158,6 +153,8 @@ void RobotFilter::predict(qint64 time, bool updateFuture, bool permanentUpdate, 
     kalman->F(5, 5) = 1;
     // clear control input
     kalman->u = Kalman::Vector::Zero();
+
+    // after 2 * PROCESSOR_TICK_DURATION we stop using the command, because it is too old
     if (time < cmd.second + 2 * PROCESSOR_TICK_DURATION) {
         // radio commands are intended to be applied over 10ms
         float cmd_interval = (float)std::max(PROCESSOR_TICK_DURATION*1E-9, timeDiff);
@@ -179,9 +176,11 @@ void RobotFilter::predict(qint64 time, bool updateFuture, bool permanentUpdate, 
         float bounded_a_y = qBound(-MAX_LINEAR_ACCELERATION, accel_y, MAX_LINEAR_ACCELERATION);
         float bounded_a_omega = qBound(-MAX_ROTATION_ACCELERATION, accel_omega, MAX_ROTATION_ACCELERATION);
 
-        kalman->u(0) = 0;
-        kalman->u(1) = 0;
-        kalman->u(2) = 0;
+        // controls are piecewise constant accelerations
+        // -> equations of motion
+        kalman->u(0) = 0.5 * bounded_a_x * timeDiff * timeDiff;
+        kalman->u(1) = 0.5 * bounded_a_y * timeDiff * timeDiff;
+        kalman->u(2) = 0.5 * bounded_a_omega * timeDiff * timeDiff;
         kalman->u(3) = bounded_a_x * timeDiff;
         kalman->u(4) = bounded_a_y * timeDiff;
         kalman->u(5) = bounded_a_omega * timeDiff;

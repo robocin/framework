@@ -51,11 +51,11 @@
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QTabBar>
+#include <algorithm>
 
-MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
+MainWindow::MainWindow(bool tournamentMode, bool isRa, bool broadcastUiCommands, QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow),
-    m_transceiverActive(false),
     m_lastStageTime(0),
     m_isTournamentMode(tournamentMode),
     m_currentWidgetConfiguration(0)
@@ -88,10 +88,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     ui->actionQuit->setShortcut(QKeySequence::Quit);
 
     // setup status bar
-    m_transceiverStatus = new QLabel("Transceiver");
-    QPalette p = m_transceiverStatus->palette();
-    p.setColor(QPalette::WindowText, Qt::red);
-    m_transceiverStatus->setPalette(p);
+    m_transceiverStatus = new QLabel("<font color=\"red\">SYS</font>");
     statusBar()->addWidget(m_transceiverStatus);
 
     m_logTimeLabel = new LogLabel();
@@ -127,7 +124,7 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     ui->input->init(m_inputManager);
 
     connect(ui->strategies, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
-    ui->strategies->init(this);
+    ui->strategies->init(this, m_isTournamentMode);
 
     connect(ui->robots, SIGNAL(sendCommand(Command)), SLOT(sendCommand(Command)));
 #ifdef EASY_MODE
@@ -253,11 +250,17 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     // find all simulator configuration files
     QDirIterator dirIterator(QString(ERFORCE_CONFDIR) + "simulator", {"*.txt"}, QDir::AllEntries | QDir::NoSymLinks | QDir::NoDotAndDotDot);
     m_simulatorSetupGroup = new QActionGroup(this);
-    QString selectedFile = s.value("Simulator/SetupFile", "2020").toString();
+    QString selectedFile = s.value("Simulator/SetupFile", "2023").toString();
     QAction *selectedAction = nullptr;
+    std::vector<QString> shownFileNames;
     while (dirIterator.hasNext()) {
         QFileInfo file(dirIterator.next());
         QString shownFilename = file.fileName().split(".").first();
+        shownFileNames.push_back(shownFilename);
+    }
+
+    std::sort(shownFileNames.begin(), shownFileNames.end(), std::greater<QString>());
+    for (const auto shownFilename : shownFileNames) {
         QAction *setupAction = new QAction(this);
         setupAction->setText(shownFilename);
         setupAction->setCheckable(true);
@@ -270,6 +273,9 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
         }
     }
     connect(m_simulatorSetupGroup, SIGNAL(triggered(QAction*)), this, SLOT(simulatorSetupChanged(QAction*)));
+    connect(ui->actionSimulateWithBoundaries, &QAction::triggered, this, &MainWindow::simulateWithBoundariesChanged);
+    // restore actionSimulateWithBoundaries state, because it is needed in simulatorSetupChanged
+    ui->actionSimulateWithBoundaries->setChecked(s.value("Simulator/WithBoundaries").toBool());
     if (selectedAction) {
         selectedAction->setChecked(true);
         simulatorSetupChanged(selectedAction);
@@ -334,6 +340,19 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
         addAction(action);
     }
 
+    // populate 'Widgets' tab (QMenu class) with all QDockWidgets and QToolBars
+    QList<QDockWidget*> dockWidgets = findChildren<QDockWidget*>();
+    for (QDockWidget* dockWidget : dockWidgets) {
+        QAction* toggleAction = dockWidget->toggleViewAction();
+        ui->menuWidgets->addAction(toggleAction);
+    }
+    ui->menuWidgets->addSeparator();
+    QList<QToolBar*> toolBar = findChildren<QToolBar*>();
+    for (QToolBar* tool : toolBar) {
+        QAction* toggleAction = tool->toggleViewAction();
+        ui->menuWidgets->addAction(toggleAction);
+    }
+
     addAction(ui->actionGoLive);
     addAction(ui->actionFrameBack);
     addAction(ui->actionFrameForward);
@@ -367,6 +386,8 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
         cmd->mutable_strategy_yellow()->set_tournament_mode(true);
         cmd->mutable_strategy_autoref()->set_tournament_mode(true);
         sendCommand(cmd);
+
+        ui->input->disableBroadcastOption();
     }
 
     // logplayer mode connections
@@ -411,6 +432,15 @@ MainWindow::MainWindow(bool tournamentMode, bool isRa, QWidget *parent) :
     ui->refereeinfo->setStyleSheets(isDarkMode);
     ui->strategies->setUseDarkColors(isDarkMode);
     ui->replay->setUseDarkColors(isDarkMode);
+
+    // don't broadcast in tournament mode
+    if (!tournamentMode) {
+        if (broadcastUiCommands) {
+            m_uiCommandServer.emplace();
+        }
+
+        connect(ui->input, &InputWidget::broadcastCommandsChanged, this, &MainWindow::broadcastCommandsChanged);
+    }
 }
 
 MainWindow::~MainWindow()
@@ -526,6 +556,7 @@ void MainWindow::saveConfig()
     s.setValue("Simulator/SetupFile", simulatorSetupFile);
     s.setValue("Simulator/AutoPause", ui->actionAutoPause->isChecked());
     s.setValue("Simulator/Enabled", ui->actionSimulator->isChecked());
+    s.setValue("Simulator/WithBoundaries", ui->actionSimulateWithBoundaries->isChecked());
     s.setValue("Referee/Internal", ui->actionInternalReferee->isChecked());
     s.setValue("InputDevices/Enabled", ui->actionInputDevices->isChecked());
     s.setValue("LogWriter/UseLocation", ui->actionUseLocation->isChecked());
@@ -629,17 +660,26 @@ void MainWindow::switchToWidgetConfiguration(int configId, bool forceUpdate)
 
 void MainWindow::simulatorSetupChanged(QAction * action)
 {
-    updateSimulatorSetup("simulator/" + action->text().replace("&", ""));
-}
-
-void MainWindow::updateSimulatorSetup(QString setupFile) {
+    const QString setupFile = "simulator/" + action->text().replace("&", "");
     Command command(new amun::Command);
     if (!loadConfiguration(setupFile, command->mutable_simulator()->mutable_simulator_setup(), false)) {
         return;
     }
 
+    // change field setup to play with boundaries
+    if (ui->actionSimulateWithBoundaries->isChecked()) {
+        auto mutableSimulatorSetupGeometry = command->mutable_simulator()->mutable_simulator_setup()->mutable_geometry();
+        const auto boundaryWidthTotal = 2.0 * mutableSimulatorSetupGeometry->boundary_width();
+        const auto fieldHeight = mutableSimulatorSetupGeometry->field_height();
+        const auto fieldWidth = mutableSimulatorSetupGeometry->field_width();
+        mutableSimulatorSetupGeometry->set_field_height(fieldHeight);
+        mutableSimulatorSetupGeometry->set_field_width(fieldWidth);
+        mutableSimulatorSetupGeometry->set_boundary_width(0.0);
+    }
+
     // reload the strategies / autoref
     sendCommand(command);
+    ui->field->setCornerBlockCathetusLength(command->simulator().simulator_setup().geometry().corner_block_cathetus_length());
 
     // resend all the information the simulator needs
     ui->robots->resend();
@@ -648,41 +688,102 @@ void MainWindow::updateSimulatorSetup(QString setupFile) {
     setSimulatorEnabled(ui->actionSimulator->isChecked());
 }
 
+MainWindow::TransceiverStatusBuffer::TransceiverStatusBuffer(const amun::StatusTransceiver &status) :
+    active(status.active()),
+    error(status.has_error() ? QString::fromStdString(status.error()) : QString{}),
+    dropped_usb_packets(status.has_dropped_usb_packets() ? status.dropped_usb_packets() : 0),
+    dropped_commands(status.has_dropped_commands() ? status.dropped_commands() : 0)
+{
+}
+
 void MainWindow::handleStatus(const Status &status)
 {
     if (status->has_transceiver()) {
         const amun::StatusTransceiver &t = status->transceiver();
-        QString tooltip = "";
-        QString color = "red";
 
-        m_transceiverActive = t.active();
+        if (t.has_name()) {
+            m_transceiverStatusBuffer.insert(
+                QString::fromStdString(t.name()),
+                TransceiverStatusBuffer { t }
+            );
 
-        if (m_transceiverActive) {
-            color = "darkGreen";
-
-            if (t.dropped_usb_packets() > 0) {
-                color = "yellow";
-                tooltip += QString("\nDropped usb packets: %1").arg(t.dropped_usb_packets());
-            }
-            if (t.dropped_commands() > 0) {
-                color = "yellow";
-                tooltip += QString("\nDropped commands: %1").arg(t.dropped_commands());
-            }
-            tooltip = tooltip.mid(1);
+            m_radioSystemStatus.active = std::all_of(
+                m_transceiverStatusBuffer.constKeyValueBegin(), m_transceiverStatusBuffer.constKeyValueEnd(),
+                [](auto kv) { return kv.second.active; });
         } else {
-            color = "red";
+            /* This case triggers
+             * - If a log recorded prior to the introduction of multiple
+             *   transceiver support is played back
+             * - If the radio system itself sends a status
+             *
+             * In the first case, we use the active value of the received
+             * status. If multiple transceivers are implemented, we mark the
+             * system as active if every transceiver is active. Note that this
+             * breaks, if the system itself (i.e. !has_name()) would try to
+             * send out active itself
+             */
+            m_radioSystemStatus = TransceiverStatusBuffer { t };
+        }
+
+        if (!t.has_name() && !t.active()) {
+            /* We either disabled radio or a general error (i.e. in the radio
+             * system) occurred
+             *
+             * Note that this also triggers on transceiver timeouts for now,
+             * but we can't differentiate which transceiver timeouted for now
+             * so not displaying any specific information is fine
+             */
+            m_transceiverStatusBuffer.clear();
+        }
+
+        QString barText;
+        QString tooltip;
+        auto appendTransceiverStatus = [&barText, &tooltip](const QString &name, const TransceiverStatusBuffer &transceiverStatus, bool isFirst) {
+            if (!isFirst) {
+                barText.append(' ');
+            }
+            barText.append("<font color=\"");
+
+            const char *color;
+            if (transceiverStatus.dropped_commands > 0
+                    || transceiverStatus.dropped_usb_packets > 0) {
+                color = "yellow";
+
+                tooltip.append(name);
+                tooltip.append(" (");
+                if (transceiverStatus.dropped_commands > 0) {
+                    tooltip.append(QString { "CMDDrop %1" }.arg(transceiverStatus.dropped_commands));
+                }
+                if (transceiverStatus.dropped_usb_packets > 0) {
+                    tooltip.append(QString { " USBDrop %1" }.arg(transceiverStatus.dropped_usb_packets));
+                }
+                tooltip.append(") ");
+            } else if (transceiverStatus.active) {
+                color = "darkGreen";
+            } else {
+                color = "red";
+            }
+            barText.append(color);
+            barText.append("\">");
+
+            barText.append(name);
+
+            if (!transceiverStatus.error.isNull()) {
+                barText.append(" (");
+                barText.append(transceiverStatus.error);
+                barText.append(')');
+            }
+
+            barText.append("</font>");
+        };
+
+        appendTransceiverStatus("SYS", m_radioSystemStatus, true);
+        for (auto it = m_transceiverStatusBuffer.constBegin(); it != m_transceiverStatusBuffer.constEnd(); ++it) {
+            appendTransceiverStatus(it.key(), it.value(), false);
         }
 
         m_transceiverStatus->setToolTip(tooltip);
-
-        QString text = QString("<font color=\"%1\">Transceiver%2</font>").arg(color);
-        QString error = QString::fromStdString(t.error()).trimmed();
-        if (!error.isEmpty()) {
-            text = text.arg(": " + QString::fromStdString(t.error()));
-        } else {
-            text = text.arg("");
-        }
-        m_transceiverStatus->setText(text);
+        m_transceiverStatus->setText(barText);
     }
 
     if (status->has_game_state()) {
@@ -753,6 +854,10 @@ void MainWindow::handleStatus(const Status &status)
             QMessageBox::critical(this, "Visionlog export error", QString::fromStdString(response.export_visionlog_error()));
         }
 
+        if (response.has_log_open_error()) {
+            QMessageBox::critical(this, "Log error", QString::fromStdString(response.log_open_error()));
+        }
+
         if (response.has_requested_log_uid()) {
             QMessageBox::information(this, "Log UID", QString::fromStdString(response.requested_log_uid()));
         }
@@ -817,6 +922,9 @@ void MainWindow::requestUidInsertWindow()
 
 void MainWindow::sendCommand(const Command &command)
 {
+    if (m_uiCommandServer) {
+        m_uiCommandServer.value().send(command);
+    }
     m_gitInfo->handleCommand(command);
     emit m_amun.sendCommand(command);
 }
@@ -1064,14 +1172,41 @@ void MainWindow::openFile(QString fileName)
 }
 
 void MainWindow::changeDivision(world::Geometry::Division division) {
+    auto currentSetup = m_simulatorSetupGroup->checkedAction()->text().replace("&", "");
+    QString newSetup;
+    QString defaultSetup;
     switch (division) {
         case world::Geometry_Division_A:
-            updateSimulatorSetup("simulator/" + m_simulatorSetupGroup->checkedAction()->text().replace("&", ""));
+            newSetup = currentSetup.remove("B");
+            defaultSetup = "2023";
             break;
         case world::Geometry_Division_B:
-            updateSimulatorSetup("simulator/2020B");
+            if (currentSetup.endsWith("B")) {
+                newSetup = currentSetup;
+            } else {
+                newSetup = currentSetup + "B";
+            }
+            defaultSetup = "2023B";
             break;
     }
+    const auto setupActions = m_simulatorSetupGroup->actions();
+    // first try to find action for newSetup and if that fails try again with defaultSetup
+    for (const auto setup : { newSetup, defaultSetup }) {
+        const auto findResult = std::find_if(setupActions.begin(), setupActions.end(),
+            [&] (const auto action) {
+                return action->text() == setup;
+            });
+        // findResult is setupActions.end() iff setup could not be found
+        if (findResult != setupActions.end()) {
+            (*findResult)->setChecked(true);
+            // Qt documentation says that setChecked emits triggered(), but it apparently does not,
+            // so we manually have to tell the action to emit triggered()
+            (*findResult)->activate(QAction::ActionEvent::Trigger);
+            return;
+        }
+    }
+    std::cerr << "Failed to change divisions, because setup " << newSetup.toStdString()
+        << " and setup " << defaultSetup.toStdString() << " could not be found!" << std::endl;
 }
 
 void MainWindow::updatePalette(QPalette palette) {
@@ -1082,4 +1217,17 @@ void MainWindow::updatePalette(QPalette palette) {
     ui->refereeinfo->setStyleSheets(isDarkMode);
     ui->strategies->setUseDarkColors(isDarkMode);
     ui->replay->setUseDarkColors(isDarkMode);
+}
+
+void MainWindow::broadcastCommandsChanged(const bool state)
+{
+    if (state && !m_uiCommandServer) {
+        m_uiCommandServer.emplace();
+    } else if (!state && m_uiCommandServer) {
+        m_uiCommandServer.reset();
+    }
+}
+
+void MainWindow::simulateWithBoundariesChanged() {
+    simulatorSetupChanged(m_simulatorSetupGroup->checkedAction());
 }

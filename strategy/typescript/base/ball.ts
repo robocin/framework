@@ -36,49 +36,50 @@ const MAXSPEED_MIN_ROBOT_DIST = 0.1;
 
 export class Ball {
 	/** Ball radius */
-	radius: number = 0.0215;
+	public radius: number = 0.0215;
 	/** Time when the ball was lost. Only has meaning when Ball is not visible */
-	lostSince: number = 0;
+	public lostSince: number = 0;
 	/** Current ball position */
-	pos: Readonly<Position> = new Vector(0, 0);
+	public pos: Readonly<Position> = new Vector(0, 0);
 	/** Movement direction, length is speed in m/s */
-	speed: Readonly<Speed> = new Vector(0, 0);
+	public speed: Readonly<Speed> = new Vector(0, 0);
 	/** Ball height above the field */
-	posZ: number = 0;
+	public posZ: number = 0;
 	/** Upwards speed in m/s */
-	speedZ: number = 0;
-	maxSpeed: number = 0;
-	initSpeedZ: number = 0;
-	touchdownPos: Vector | undefined;
-	isBouncing: boolean = false;
-	framesDeceleration: number = Infinity;
-	detectionQuality: number = 0.6;
-	hasRawData: boolean = false;
-	framesDecelerating: number = 0;
+	public speedZ: number = 0;
+	public maxSpeed: number = 0;
+	public initSpeedZ: number = 0;
+	public touchdownPos: Vector | undefined;
+	public isBouncing: boolean = false;
+	public framesDeceleration: number = Infinity;
+	public detectionQuality: number = 0.6;
+	public hasRawData: boolean = false;
+	public framesDecelerating: number = 0;
 
 	// private attributes
 	private _isVisible: boolean = false;
 	private _hadRawData: boolean = false; // used for detecting old simulator logs with no recoded ball raw data
-	private ballPosInFrame: Position[] = [];
-	private counter: number = 0;
-	private ballIsNearToRobot: boolean = false;
+	private _ballPosInFrame: Position[] = [];
+	private _counter: number = 0;
+	private _ballIsNearToRobot: boolean = false;
 	// constructor must only be called by world!
-	constructor() {
+	public constructor() {
 		//
 	}
 
-	_toString() {
+	// eslint-disable-next-line @typescript-eslint/naming-convention
+	public _toString() {
 		const x = this.pos.x.toFixed(3).padStart(6);
 		const y = this.pos.x.toFixed(3).padStart(6);
 		const speed = this.speed.length().toFixed(1).padStart(3);
 		return `Ball(pos = (${x}, ${y}), speed = ${speed})`;
 	}
 
-	toString() {
+	public toString() {
 		return this._toString();
 	}
 
-	_updateLostBall(time: number) {
+	private _updateLostBall(time: number) {
 		// set lost timer
 		if (this._isVisible) {
 			this._isVisible = false;
@@ -90,7 +91,7 @@ export class Ball {
 	}
 
 	// Processes ball information from amun, passed by world
-	_update(data: world.Ball | undefined, time: number, geom?: GeometryType, robots?: Robot[]) {
+	public update(data: world.Ball | undefined, time: number, geom?: GeometryType, robots?: readonly Robot[]) {
 		this.hasRawData = false;
 		// WARNING: this is the quality BEFORE the frame
 		plot.addPlot("Ball.quality", this.detectionQuality);
@@ -139,7 +140,7 @@ export class Ball {
 		this._updateRawDetections(data.raw);
 	}
 
-	_updateRawDetections(rawData: world.BallPosition[] | undefined) {
+	private _updateRawDetections(rawData: world.BallPosition[] | undefined) {
 		let count = 0;
 		if (rawData !== undefined && rawData.length > 0) {
 			this._hadRawData = true;
@@ -151,7 +152,7 @@ export class Ball {
 		}
 	}
 
-	_updateTrackedState(data: world.Ball, lastSpeedLength: number, robots?: Robot[]) {
+	private _updateTrackedState(data: world.Ball, lastSpeedLength: number, robots?: readonly Robot[]) {
 		// speed tracking
 
 		if (data.max_speed != undefined) {
@@ -164,29 +165,29 @@ export class Ball {
 			if (this.speed.length() - lastSpeedLength > 0.2) {
 				this.framesDecelerating = 0;
 			} else {
-				this.ballPosInFrame[this.counter] = this.pos;
-				this.counter += 1;
+				this._ballPosInFrame[this._counter] = this.pos;
+				this._counter += 1;
 				this.framesDecelerating = this.framesDecelerating + 1;
 			}
 			// if the ball does not accelerate extremely for 3 frames straight, the current velocity
 			// is taken as the maximum ball speed
 			if (robots != undefined) {
-				for (let framepos of this.ballPosInFrame) {
+				for (let framepos of this._ballPosInFrame) {
 					for (let r of robots) {
 						if (r.pos.distanceToSq(framepos) < MAXSPEED_MIN_ROBOT_DIST * MAXSPEED_MIN_ROBOT_DIST) {
-							this.ballIsNearToRobot = true;
+							this._ballIsNearToRobot = true;
 							break;
 						}
 					}
 				}
 			}
-			if (this.framesDecelerating === 3 && this.ballIsNearToRobot) {
-				this.ballIsNearToRobot = false;
-				this.counter = 0;
+			if (this.framesDecelerating === 3 && this._ballIsNearToRobot) {
+				this._ballIsNearToRobot = false;
+				this._counter = 0;
 				this.maxSpeed = this.speed.length();
 			}
-			if (this.counter === 3) {
-				this.counter = 0;
+			if (this._counter === 3) {
+				this._counter = 0;
 			}
 			if (this.maxSpeed < this.speed.length()) {
 				this.maxSpeed = this.maxSpeed + 0.3 * (this.speed.length() - this.maxSpeed);
@@ -200,7 +201,7 @@ export class Ball {
 	 * Checks whether the ball position is valid
 	 * @returns True if ball is visible and position and speed are not NaN
 	 */
-	isPositionValid() {
+	public isPositionValid() {
 		if (!this._isVisible) {
 			return false;
 		}

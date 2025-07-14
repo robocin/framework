@@ -22,12 +22,14 @@
 #include "input/inputmanager.h"
 #include "ui_inputwidget.h"
 #include <QSettings>
+#include <QDebug>
 
 InputWidget::InputWidget(QWidget *parent) :
     QWidget(parent),
     ui(new Ui::InputWidget)
 {
     ui->setupUi(this);
+    connect(ui->checkBroadcast, &QCheckBox::stateChanged, this, &InputWidget::convertBroadcastState);
 }
 
 InputWidget::~InputWidget()
@@ -42,6 +44,8 @@ void InputWidget::saveConfig()
     s.beginGroup("Input");
     s.setValue("SpeedLinear", ui->spinLinear->value());
     s.setValue("SpeedRotation", ui->spinRotation->value());
+    s.setValue("ShootPower", ui->shootPower->value());
+    s.setValue("DribblerPower", ui->dribblerPower->value());
     s.setValue("Global", ui->checkGlobal->isChecked());
     s.setValue("Deadzone", ui->gamepadDeadzone->value());
     s.endGroup();
@@ -68,7 +72,33 @@ void InputWidget::load()
     s.beginGroup("Input");
     ui->spinLinear->setValue(s.value("SpeedLinear", 1.0).toDouble());
     ui->spinRotation->setValue(s.value("SpeedRotation", 1.0).toDouble());
+    ui->shootPower->setValue(s.value("ShootPower", 2.0).toDouble());
+    ui->dribblerPower->setValue(s.value("DribblerPower", 1.0).toDouble());
     ui->checkGlobal->setChecked(s.value("Global").toBool());
     ui->gamepadDeadzone->setValue(s.value("Deadzone", 0.02).toDouble());
     s.endGroup();
+}
+
+void InputWidget::convertBroadcastState(int state)
+{
+    const auto actualState = static_cast<Qt::CheckState>(state);
+    switch (actualState) {
+        case Qt::CheckState::Checked: {
+            emit broadcastCommandsChanged(true);
+            break;
+        }
+        case Qt::CheckState::Unchecked: {
+            emit broadcastCommandsChanged(false);
+            break;
+        }
+        case Qt::CheckState::PartiallyChecked: {
+            qDebug() << "Error! Why is a QCheckBox PartiallyChecked?";
+            break;
+        }
+    }
+}
+
+void InputWidget::disableBroadcastOption()
+{
+    ui->checkBroadcast->setDisabled(true);
 }
