@@ -23,7 +23,7 @@
 #include "path/endinobstaclesampler.h"
 #include "path/worldinformation.h"
 #include "path/alphatimetrajectory.h"
-#include "path/speedprofile.h"
+#include "path/trajectory.h"
 
 #include <functional>
 
@@ -83,7 +83,7 @@ static Vector optimizeCloseness(std::function<void(WorldInformation&)> obstacleA
             // ASSERT_FALSE does not work here since a return value is necessary
             return Vector(0, 0);
         }
-        timeOffset += profile.time();
+        timeOffset += profile.endTime();
     }
 
     return result[0].endPosition();

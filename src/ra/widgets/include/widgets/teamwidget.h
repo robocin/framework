@@ -21,6 +21,7 @@
 #ifndef TEAMWIDGET_H
 #define TEAMWIDGET_H
 
+#include "automaticentrypointsstorage.h"
 #include "protobuf/command.h"
 #include "protobuf/status.h"
 #include <QKeyEvent>
@@ -29,6 +30,10 @@
 #include <QToolButton>
 #include <QStringList>
 #include <QPushButton>
+#include <QVector>
+#include <QString>
+
+class EntrypointSelectionToolButton;
 
 class TeamWidget : public QFrame
 {
@@ -44,7 +49,7 @@ signals:
     void sendCommand(const Command &command);
 
 public:
-    void init(amun::StatusStrategyWrapper::StrategyType type);
+    void init(amun::StatusStrategyWrapper::StrategyType type, bool tournamentMode);
     void load();
     void setRecentScripts(std::shared_ptr<QStringList> recent);
     void forceAutoReload(bool force);
@@ -59,9 +64,9 @@ public slots:
 
 private slots:
     void showOpenDialog();
+    void showAutomaticEntrypointDialog();
     void open();
-    void selectEntryPoint(const QString &entry_point);
-    void selectEntryPoint(QAction* action);
+    void sendFilenameAndEntrypoint(const QString &entry_point);
     void closeScript();
     void prepareScriptMenu();
     void sendReload();
@@ -69,6 +74,7 @@ private slots:
     void sendEnableDebug(bool enable);
     void sendTriggerDebug();
     void sendPerformanceDebug(bool enable);
+    void sendAutomaticEntrypoints();
 
 private:
     void open(const QString &filename);
@@ -82,23 +88,26 @@ private:
 private:
     amun::StatusStrategyWrapper::StrategyType m_type;
     QToolButton *m_btnOpen;
-    QToolButton *m_btnEntryPoint;
+    QVector<QString> m_lastSentEntrypoints;
+    EntrypointSelectionToolButton *m_btnEntryPoint;
     QToolButton *m_btnReload;
     QToolButton *m_btnEnableDebug;
     QMenu *m_scriptMenu;
-    QMenu *m_entryPoints;
     QString m_filename;
     QString m_entryPoint;
+    AutomaticEntrypointsStorage m_automaticEntrypoints;
     QAction *m_actionDisable;
     QAction *m_reloadAction;
     QAction *m_debugAction;
     QAction *m_performanceAction;
+    QAction *m_automaticEntrypointAction;
     bool m_userAutoReload;
     bool m_notification;
     bool m_compiling;
     std::shared_ptr<QStringList> m_recentScripts;
     bool m_useDarkColors = false;
     bool m_contentEnabled = true;
+    bool m_isTournamentMode;
 };
 
 #endif // TEAMWIDGET_H

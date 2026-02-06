@@ -14,15 +14,6 @@ already cloned it, you can also use `git submodule init && git submodule update
 
 Ra for Windows is built in a nightly pipeline and can be [downloaded here](https://project.robotics-erlangen.de/robocup/software/-/jobs/artifacts/master/download?job=cross-compile-ra).
 
-## Table of Contents
-- [Getting started and compiling the framework](#getting-started-and-compiling-the-framework)
-- [Contained programs](#contained-programs-and-their-corresponding-makefile-target)
-  * [Ra and Horus](#ra-and-horus)
-  * [Simulator CLI](#simulator-cli)
-  * [Other utilities](#other-utilities)
-- [Language services and Tests](#language-services-and-tests)
-
-
 ## Getting started and compiling the framework
 First, [see here](COMPILE.md) on how to setup a build environment.
 
@@ -56,12 +47,14 @@ commands encoded using the [SSL simulation
 protocol](https://github.com/RoboCup-SSL/ssl-simulation-protocol) and broadcast
 the state of the world (i.e. positions of robots and the ball) using the SSL
 vision protocol.
+The `simulator-cli` multicasts the vision packets on **port 10020** (instead of the usual 10006) to avoid conflicts in tournament networks.
 
-The `simulator-cli` takes two command line arguments:
+The `simulator-cli` takes three command line arguments:
 - `-g short_file_name` sets the initial geometry to one of the defaults in `config/simulator`.
 - `--realism short_file_name` sets the initial realism to on of the defaults in `config/simulator-realism`
+- `--localhost` forces the simulator to use the localhost as the multicast address (and thus only send packets to the local machine).
 
-Both of these argument take a `short_file_name`, i.e. just the filename without the path or the extension.
+A `short_file_name` is just the filename without the path or the extension.
 For example, to start the binary with no realism and 2018 setup, call `simulator-cli -g 2018 --realism None`
 
 #### Choosing between Division A and B
@@ -69,7 +62,6 @@ The simulator can be used for both divisions, but the only things that change be
 
 The default is the division B and it is possible to select this division just by starting the binary with the command `simulator-cli` or by selecting the geometry file for division B `simulator-cli -g 2020B`.
 To select the division A settings, call `simulator-cli -g 2020`.
-
 
 ### Other utilities
 This repo also contains various utilities:

@@ -21,12 +21,15 @@
 #ifndef TRACKER_H
 #define TRACKER_H
 
+#include "core/areaofinterest.h"
 #include "protobuf/command.pb.h"
-#include "protobuf/status.h"
+#include "protobuf/debug.pb.h"
+#include "protobuf/ssl_detection.pb.h"
 #include "protobuf/world.pb.h"
 #include <QMap>
 #include <QPair>
 #include <QByteArray>
+#include <QObject>
 
 class BallTracker;
 class RobotFilter;
@@ -37,49 +40,51 @@ class SSL_GeometryFieldSize;
 class SSL_FieldCircularArc;
 class SSL_FieldLineSegment;
 class SSL_GeometryCameraCalibration;
-class FieldTransform;
+class WorldParameters;
 struct CameraInfo;
 
-class Tracker
+class Tracker : public QObject
 {
+    Q_OBJECT
+
 private:
     typedef QMap<uint, QList<RobotFilter*> > RobotMap;
     struct Packet {
-        Packet(const QByteArray &data, qint64 time, QString sender) : data(data), time(time), sender(sender) {}
-        QByteArray data;
+        Packet(const SSL_DetectionFrame &detection, qint64 time) : detection(detection), time(time) {}
+        SSL_DetectionFrame detection;
         qint64 time;
-        QString sender;
     };
 
 public:
-    Tracker(bool robotsOnly, bool isSpeedTracker);
+    Tracker(bool robotsOnly, bool isSpeedTracker, WorldParameters *m_worldParameters);
     ~Tracker();
     Tracker(const Tracker&) = delete;
     Tracker& operator=(const Tracker&) = delete;
 
 public:
     void process(qint64 currentTime);
-    Status worldState(qint64 currentTime, bool resetRaw);
+    void worldState(world::State *worldState, qint64 currentTime, bool resetRaw);
+    bool injectDebugValues(qint64 currentTime, amun::DebugValues *debug);
+    void clearDebugValues();
 
-    void setFlip(bool flip);
-    void queuePacket(const QByteArray &packet, qint64 time, QString sender);
+    void queuePacket(const SSL_DetectionFrame &detection, qint64 time);
     void queueRadioCommands(const QList<robot::RadioCommand> &radio_commands, qint64 time);
     void handleCommand(const amun::CommandTracking &command, qint64 time);
     void reset();
-    void finishProcessing(); // has to be called after all calls to worldState for one frame
-    void setGeometryUpdated() { m_geometryUpdated = true; }
+    void updateTeam(const robot::Team &team, bool isBlue);
+
+public slots:
     void setBallModel(const world::BallModel &ballModel) { m_ballModel.CopyFrom(ballModel); }
+    void updateCamera(const SSL_GeometryCameraCalibration &c, const QString &sender);
 
 private:
-    void updateCamera(const SSL_GeometryCameraCalibration &c, QString sender);
-
     void invalidateRobotFilter(QList<RobotFilter*> &filters, const qint64 maxTime, const qint64 maxTimeLast, qint64 currentTime);
     void invalidateBall(qint64 currentTime);
     void invalidateRobots(RobotMap &map, qint64 currentTime);
 
     QList<RobotFilter*> getBestRobots(qint64 currentTime, int desiredCamera);
-    void trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiveTime, qint64 visionProcessingDelay);
-    void trackRobot(RobotMap& robotMap, const SSL_DetectionRobot &robot, qint64 receiveTime, qint32 cameraId, qint64 visionProcessingDelay,
+    void trackBallDetections(const SSL_DetectionFrame &frame, qint64 sourceTime, qint64 visionProcessingDelay);
+    void trackRobot(RobotMap& robotMap, const SSL_DetectionRobot &robot, qint64 sourceTime, qint32 cameraId, qint64 visionProcessingDelay,
                     bool teamIsYellow);
 
     BallTracker* bestBallFilter();
@@ -89,16 +94,11 @@ private:
     typedef QPair<robot::RadioCommand, qint64> RadioCommand;
     CameraInfo * const m_cameraInfo;
 
-    qint64 m_systemDelay;
+    qint64 m_visionTransmissionDelay;
     qint64 m_timeSinceLastReset;
     // used to delay the reset, to avoid accepting invalid vision frames that were sent before reset was triggered
     qint64 m_timeToReset = std::numeric_limits<qint64>::max();
 
-    world::Geometry m_geometry;
-    world::Geometry m_virtualFieldGeometry;
-    bool m_geometryUpdated;
-    bool m_hasVisionData;
-    bool m_virtualFieldEnabled;
     world::BallModel m_ballModel;
 
     QMap<qint32, qint64> m_lastUpdateTime; // indexed by camera id
@@ -116,14 +116,10 @@ private:
     RobotMap m_robotFilterBlue;
 
     bool m_aoiEnabled;
-    float m_aoi_x1;
-    float m_aoi_y1;
-    float m_aoi_x2;
-    float m_aoi_y2;
+    AreaOfInterest m_aoi;
 
     QList<QString> m_errorMessages;
-    QList<std::pair<SSL_WrapperPacket, qint64>> m_detectionWrappers;
-    std::unique_ptr<FieldTransform> m_fieldTransform;
+    WorldParameters *m_worldParameters = nullptr;
 
     // if possible, select robots from this camera
     int m_desiredRobotCamera = -1;

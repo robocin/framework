@@ -19,12 +19,14 @@
 # ***************************************************************************
 
 add_executable(cpptests
+    core/areaofinterest.cpp
+    core/fieldtransform.cpp
     core/vector.cpp
     core/rng.cpp
     core/run_out_of_scope.cpp
     core/coordinates.cpp
     amun/strategy/path/boundingbox.cpp
-    amun/strategy/path/speedprofile.cpp
+    amun/strategy/path/alphatimetrajectory.cpp
     amun/strategy/path/linesegment.cpp
     amun/strategy/path/obstacles.cpp
     amun/strategy/path/endinobstaclesampler.cpp
@@ -34,10 +36,18 @@ add_executable(cpptests
     amun/seshat/combinedlogwriter.cpp
     amun/seshat/logfilereader.cpp
     amun/simulator/simulator.cpp
+    amun/processor/radio_address.cpp
     amun/processor/tracking/ballgroundcollisionfilter.cpp
 )
 
 target_compile_definitions(cpptests PRIVATE AMUNCLI_DIR="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+
+target_include_directories(cpptests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(V8_FOUND)
+    target_compile_definitions(cpptests PRIVATE V8_FOUND)
+    v8_copy_deps(cpptests)
+endif()
 
 target_link_libraries(cpptests
     lib::googletest

@@ -24,17 +24,23 @@
 #include "protobuf/command.h"
 #include "protobuf/robotcommand.h"
 #include "protobuf/ssl_mixed_team.pb.h"
+#include "protobuf/ssl_wrapper.pb.h"
 #include "protobuf/status.h"
 #include <QMap>
 #include <QPair>
 #include <QObject>
 #include <QThread>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 class CommandEvaluator;
 class Referee;
 class SpeedTracker;
 class Timer;
 class Tracker;
+class WorldParameters;
 class QTimer;
 class InternalGameController;
 
@@ -92,31 +98,44 @@ private:
     void handleControl(Team &team, const amun::CommandControl &control);
     const world::Robot *getWorldRobot(const RobotList &robots, uint id);
     void injectExtraData(Status &status);
+    void clearExtraData();
+    void injectRawWorldState(Status &status);
+    void clearRawWorldState();
     void injectUserControl(Status &status, bool isBlue);
     Status assembleStatus(qint64 time, bool resetRaw);
+    void injectAndClearDebugValues(qint64 currentTime, Status &status);
     world::WorldSource currentWorldSource() const;
-    static QString ballModelConfigFile(bool isSimulator);
 
     void sendTeams();
+
+    bool m_simulatorEnabled = false;
+    bool m_internalSimulatorEnabled = false;
+    bool m_externalSimulatorEnabled = false;
 
     const Timer *m_timer;
     QTimer* m_trigger;
     Referee *m_referee;
     Referee *m_refereeInternal;
+    std::unique_ptr<WorldParameters> m_worldParameters;
     std::unique_ptr<Tracker> m_tracker;
     std::unique_ptr<Tracker> m_speedTracker;
     std::unique_ptr<Tracker> m_simpleTracker;
     QList<robot::RadioResponse> m_responses;
     QList<QByteArray> m_extraVision;
+    /*! \brief Pair of SSL_WrapperPacket and the time it was received. */
+    std::vector<std::pair<SSL_WrapperPacket, qint64>> m_visionWrapperPackets;
     ssl::TeamPlan m_mixedTeamInfo;
     bool m_mixedTeamInfoSet;
     bool m_refereeInternalActive;
-    bool m_simulatorEnabled = false;
-    bool m_internalSimulatorEnabled = false;
-    bool m_externalSimulatorEnabled = false;
     bool m_lastFlipped;
     InternalGameController *m_gameController;
     QThread *m_gameControllerThread;
+
+    // Models the time it takes for radio commands to reach the robots,
+    // after it leaves the processor.
+    // IMPORTANT: the value probably needs to be reevaluated if anything
+    // about the setup changes.
+    uint64_t m_trackingRadioCommandDelay = 0;
 
     Team m_blueTeam;
     Team m_yellowTeam;
@@ -124,9 +143,6 @@ private:
     bool m_transceiverEnabled;
 
     world::DivisionDimensions m_divisionDimensions;
-    world::BallModel m_ballModel;
-    bool m_ballModelUpdated = false;
-    const bool m_saveBallModel;
 };
 
 #endif // PROCESSOR_H

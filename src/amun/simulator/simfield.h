@@ -24,6 +24,7 @@
 #include "protobuf/world.pb.h"
 #include <QList>
 #include <btBulletDynamicsCommon.h>
+#include <optional>
 
 namespace camun {
     namespace simulator {
@@ -47,6 +48,8 @@ private:
     btCollisionShape *m_plane;
     btCollisionShape *m_goalSide;
     btCollisionShape *m_goalBack;
+    std::optional<btBoxShape> m_cornerBlockShape;
+    std::optional<btBoxShape> m_goalLineBoundaryShape;
     QList<btCollisionObject*> m_objects;
 };
 

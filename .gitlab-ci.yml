@@ -1,7 +1,7 @@
 # Note: if this directive is deleted, the default image is specified by the
 # runner configuration (ci.robotics-erlangen.de:/etc/gitlab-runner/config.toml
 default:
-  image: ci:ubuntu-20.04
+  image: ci:ubuntu-22.04
 
 stages:
   - build
@@ -13,7 +13,7 @@ stages:
   script:
     - mkdir -p build
     - cd build
-    - cmake -GNinja -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON ..
+    - cmake -GNinja -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -DBUILD_FIRMWARE=ON ..
     # limit average load to enforce some load distribution between different ninja instances
     - cmake --build . -- -l $(( $(nproc) * 3 / 2))
   stage: build
@@ -21,7 +21,7 @@ stages:
     # Increase the number in the cache key to start with
     # a fresh build cache. This is only useful in case of
     # build system bug and/or updates of ExternalProjects!
-    key: "$CI_JOB_NAME-2"
+    key: "$CI_JOB_NAME-3"
     paths:
       - build/
   artifacts:
@@ -31,7 +31,7 @@ stages:
 
 .test-template:
   script:
-    - "sh strategy/typescript/setup.sh"
+    - "./data/scripts/install_typescript_language_tools.sh"
     - "echo running test \"$TEST_PATTERN\""
     - "cd build"
     - "cmake -GNinja .."
@@ -41,7 +41,7 @@ stages:
     # Increase the number in the cache key to start with
     # a fresh build cache. This is only useful in case of
     # build system bug and/or updates of ExternalProjects!
-    key: "$CI_JOB_NAME-2"
+    key: "$CI_JOB_NAME-3"
     paths:
       - build/
   variables:
@@ -75,7 +75,7 @@ stages:
 
 .sanitize-template:
   script:
-    - "sh strategy/typescript/setup.sh"
+    - "./data/scripts/install_typescript_language_tools.sh"
     - "mkdir -p build"
     - "cd build"
     - "cmake -GNinja -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -DCMAKE_CXX_FLAGS=\"-fsanitize=address\" -DCMAKE_BUILD_TYPE=Debug .."
@@ -85,7 +85,7 @@ stages:
     # Increase the number in the cache key to start with
     # a fresh build cache. This is only useful in case of
     # build system bug and/or updates of ExternalProjects!
-    key: "$CI_JOB_NAME"
+    key: "$CI_JOB_NAME-1"
     paths:
       - build/
   dependencies: []
@@ -114,47 +114,26 @@ tests:
   only:
     - schedules
 
-compile-ra-18.04:
-  extends: .compile-ra-schedule
-  image: ci:ubuntu-18.04
-
-compile-ra-18.04-no-v8:
-  extends: .compile-ra-schedule
-  image: ci:ubuntu-18.04-no-v8
-
-compile-ra-20.04:
-  extends: .compile-ra-schedule
-  image: ci:ubuntu-20.04
-
 compile-ra-22.04:
   extends: .compile-ra-schedule
   image: ci:ubuntu-22.04
+
+compile-ra-22.04-no-v8:
+  extends: .compile-ra-schedule
+  image: ci:ubuntu-22.04-no-v8
+
+compile-ra-24.04:
+  extends: .compile-ra-schedule
+  image: ci:ubuntu-24.04
+
+compile-ra-24.04-no-v8:
+  extends: .compile-ra-schedule
+  image: ci:ubuntu-24.04-no-v8
 
 .test-schedule:
   extends: .test-template
   only:
     - schedules
-
-tests-18.04:
-  extends: .test-schedule
-  image: ci:ubuntu-18.04
-  dependencies:
-    - compile-ra-18.04
-  needs: [compile-ra-18.04]
-
-tests-18.04-no-v8:
-  extends: .test-schedule
-  image: ci:ubuntu-18.04-no-v8
-  dependencies:
-    - compile-ra-18.04-no-v8
-  needs: [compile-ra-18.04-no-v8]
-
-tests-20.04:
-  extends: .test-schedule
-  image: ci:ubuntu-20.04
-  dependencies:
-    - compile-ra-20.04
-  needs: [compile-ra-20.04]
 
 tests-22.04:
   extends: .test-schedule
@@ -163,28 +142,48 @@ tests-22.04:
     - compile-ra-22.04
   needs: [compile-ra-22.04]
 
+tests-22.04-no-v8:
+  extends: .test-schedule
+  image: ci:ubuntu-22.04-no-v8
+  dependencies:
+    - compile-ra-22.04-no-v8
+  needs: [compile-ra-22.04-no-v8]
+
+tests-24.04:
+  extends: .test-schedule
+  image: ci:ubuntu-24.04
+  dependencies:
+    - compile-ra-24.04
+  needs: [compile-ra-24.04]
+
+tests-24.04-no-v8:
+  extends: .test-schedule
+  image: ci:ubuntu-24.04-no-v8
+  dependencies:
+    - compile-ra-24.04-no-v8
+  needs: [compile-ra-24.04-no-v8]
 
 .sanitize-schedule:
   extends: .sanitize-template
   only:
     - schedules
 
-sanitize-18.04:
-  extends: .sanitize-schedule
-  image: ci:ubuntu-18.04
-  needs: [tests-18.04]
-
-sanitize-18.04-no-v8:
-  extends: .sanitize-schedule
-  image: ci:ubuntu-18.04-no-v8
-  needs: [tests-18.04-no-v8]
-
-sanitize-20.04:
-  extends: .sanitize-schedule
-  image: ci:ubuntu-20.04
-  needs: [tests-20.04]
-
 sanitize-22.04:
   extends: .sanitize-schedule
   image: ci:ubuntu-22.04
   needs: [tests-22.04]
+
+sanitize-22.04-no-v8:
+  extends: .sanitize-schedule
+  image: ci:ubuntu-22.04-no-v8
+  needs: [tests-22.04-no-v8]
+
+sanitize-24.04:
+  extends: .sanitize-schedule
+  image: ci:ubuntu-24.04
+  needs: [tests-24.04]
+
+sanitize-24.04-no-v8:
+  extends: .sanitize-schedule
+  image: ci:ubuntu-24.04-no-v8
+  needs: [tests-24.04-no-v8]

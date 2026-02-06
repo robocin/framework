@@ -25,9 +25,13 @@
 #include "aboutus.h"
 #include "gitinfodialog.h"
 #include "loggingsuite.h"
+#include "uicommandserver.h"
 #include <QMainWindow>
 #include <QSet>
 #include <QList>
+#include <optional>
+#include <QMap>
+#include <QString>
 
 class BacklogWriter;
 class CombinedLogWriter;
@@ -56,7 +60,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(bool tournamentMode, bool isRa, QWidget *parent = 0);
+    explicit MainWindow(bool tournamentMode, bool isRa, bool broadcastUiCommands = false, QWidget *parent = 0);
     ~MainWindow() override;
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;
@@ -73,6 +77,17 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
 
+private:
+    struct TransceiverStatusBuffer {
+        TransceiverStatusBuffer() {}
+        TransceiverStatusBuffer(const amun::StatusTransceiver&);
+
+        bool active = false;
+        QString error;
+        int32_t dropped_usb_packets = 0;
+        int32_t dropped_commands = 0;
+    };
+
 private slots:
     void handleStatus(const Status &status);
     void sendCommand(const Command &command);
@@ -85,6 +100,7 @@ private slots:
     void liveMode();
     void showBacklogMode();
     void simulatorSetupChanged(QAction * action);
+    void simulateWithBoundariesChanged();
     void saveConfig();
     void switchToWidgetConfiguration(int configId, bool forceUpdate = false);
     void showDirectoryDialog();
@@ -101,6 +117,7 @@ private slots:
     void changeDivision(world::Geometry::Division division);
     void updatePalette(QPalette palette);
     void pauseAll();
+    void broadcastCommandsChanged(const bool);
 
 private:
     void toggleHorusModeWidgets(bool enable);
@@ -108,7 +125,6 @@ private:
     void raMode();
     void horusMode();
     void createLogWriterConnections(Logsuite *suite);
-    void updateSimulatorSetup(QString setupFile);
 
 private:
     Ui::MainWindow *ui;
@@ -119,9 +135,11 @@ private:
     InternalReferee *m_internalReferee;
     ConfigDialog *m_configDialog;
     AboutUs *m_aboutUs;
-	GitInfoDialog *m_gitInfo;
+    GitInfoDialog *m_gitInfo;
     QLabel *m_transceiverStatus;
-    bool m_transceiverActive;
+    TransceiverStatusBuffer m_radioSystemStatus;
+    QMap<QString, TransceiverStatusBuffer> m_transceiverStatusBuffer;
+
     qint32 m_lastStageTime;
     LogLabel *m_logTimeLabel;
     Logsuite *m_loggingUiRa, *m_loggingUiHorus;
@@ -134,6 +152,7 @@ private:
     QActionGroup* m_simulatorSetupGroup;
     RobotUIAction *m_robotDoubleClickAction;
     RobotUIAction *m_robotCtrlClickAction;
+    std::optional<UiCommandServer> m_uiCommandServer;
 
     bool m_transceiverRealWorld = false, m_transceiverSimulator = true;
     bool m_chargeRealWorld = false, m_chargeSimulator = true;

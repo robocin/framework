@@ -86,6 +86,8 @@ private:
     void updateRadioStatus(int packetLossRx, int packetLossTx);
     void updateTemperatureStatus(int temperature);
 
+    void turnOnErrorLabel(QLabel *label, const bool value);
+
     robot::Specs m_specs;
     bool m_isGeneration;
 
@@ -106,7 +108,6 @@ private:
     bool m_exchangeRobotUpdated;
 
     int m_lastBatteryLevel;
-    float m_smoothedBatteryLevel;
 
     QLabel *m_warning;
     QLabel *m_breakBeamError;
@@ -142,6 +143,8 @@ private:
     QString m_inputDevice;
     bool m_strategyControlled;
     QLabel *m_inputLabel;
+
+    QMap<QLabel *, QTimer *> m_errorLabelTimer;
 };
 
 #endif // ROBOTWIDGET_H

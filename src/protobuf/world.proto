@@ -36,6 +36,7 @@ message Geometry {
     optional GeometryType type = 18 [default = TYPE_2014];
     optional Division division = 19 [default = A];
     optional BallModel ball_model = 20;
+    optional float corner_block_cathetus_length = 21;
 }
 
 message BallModel {
@@ -143,7 +144,8 @@ message State {
     // data for tracking replay and vision extraction
     repeated SSL_WrapperPacket vision_frames = 10;
     repeated int64 vision_frame_times = 14;
-    optional int64 system_delay = 15;
+    optional int64 vision_transmission_delay = 15;
+    optional int64 radio_command_delay = 18;
     optional WorldSource world_source = 16;
 }
 

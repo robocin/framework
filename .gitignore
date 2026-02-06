@@ -1,4 +1,4 @@
-/CMakeLists.txt.user
+/CMakeLists.txt.user*
 /build*
 /strategy/typescript/**/built
 /src/html/
@@ -13,3 +13,9 @@ node_modules/
 /config/gamecontroller/data/
 /strategy/typescript/base/protobuf.ts
 .cache*
+/.idea*
+/.vscode*.
+/.cache*
+/.clangd*
+**/__pycache__/**
+compile_commands.json

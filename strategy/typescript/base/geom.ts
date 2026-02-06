@@ -26,31 +26,6 @@
 import * as MathUtil from "base/mathutil";
 import { Position, RelativePosition, Vector } from "base/vector";
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
-function intersectCircleCircle_OLD(c1: Position, r1: number, c2: Position, r2: number): [Position?, Position?] {
-	let dist = c1.distanceTo(c2);
-	if (dist > r1 + r2) {
-		return [];
-	} else if (dist === r1 + r2) {
-		return [c1 + (c2 - c1) * 0.5];
-	} else if (dist < r1 + r2) {
-		let c1x = c1.x, c1y = c1.y, c2x = c2.x, c2y = c2.y;
-		let a1 = (r1 * r1 - r2 * r2 - c1x * c1x + c2x * c2x - c1y * c1y + c2y * c2y) / (2 * c2x - 2 * c1x);
-		let a2 = (c1y - c2y) / (c2x - c1x);
-		let k1 = 1 + (1 / (a2 * a2));
-		let k2 = 2 * c1x + (2 * c1y) / a2 + (2 * a1) / (a2 * a2);
-		let k3 = c1x * c1x + (a1 * a1) / (a2 * a2) + (2 * c1y * a1) / a2 + (c1y * c1y) - (r1 * r1);
-
-		let finalX1 = ((k2 / k1) / 2) + Math.sqrt(((k2 / k1) * (k2 / k1) / 4) - (k3 / k1));
-		let finalX2 = ((k2 / k1) / 2) - Math.sqrt(((k2 / k1) * (k2 / k1) / 4) - (k3 / k1));
-		let finalY1 = 1 / a2 * finalX1 - (a1 / a2);
-		let finalY2 = 1 / a2 * finalX2 - (a1 / a2);
-
-		return [new Vector(finalX1, finalY1), new Vector(finalX2, finalY2)];
-	}
-	return [];
-}
-
 /**
  * Intersects two circles.
  * Returns up to two intersections or nothing if no intersections exist.
@@ -83,10 +58,18 @@ function intersectCircleCircleCos(c1: Position, r1: number, c2: Position, r2: nu
 	return [res1, res2];
 }
 
+/**
+ * Bound a position to be inside of a rectangle described by two points.
+ * The rectangle points p1 and p2 do not have to be sorted, meaning e.g. for a given pos both
+ * p1 = (1, 1), p2 = (2, -1) and p1 = (1, -1), p2 = (2, 1) return the same output.
+ * @param p1 - first point of rectangle
+ * @param pos - the position you want to bound
+ * @param p2 - second point of rectangle
+ * @returns the closest position to pos that is inside of the rectangle described by p1 and p2
+ */
 export function boundRect(p1: Position, pos: Position, p2: Position): Position {
 	return new Vector(MathUtil.bound(Math.min(p1.x, p2.x), pos.x, Math.max(p1.x, p2.x)),
 						MathUtil.bound(Math.min(p1.y, p2.y), pos.y, Math.max(p1.y, p2.y)));
-	// return new Vector(MathUtil.bound(min.x, pos.x, max.x), MathUtil.bound(min.y, pos.y, max.y))
 }
 
 /**
@@ -144,6 +127,7 @@ export function intersectLineCircle(offset: Position, dir: RelativePosition, cen
  * @returns lambda2, intersection2 = offset + lambda2*direction (lambda of second point on the line)
  * @returns lambda3, intersection1 = offsetCorridor + lambda3*directionCorridor (lambda in the corridor)
  * @returns lambda4, intersection2 = offsetCorridor + lambda4*directionCorridor (lambda in the corridor)
+ *
  * lambda1, lambda2, lambda3, lambda4 can be undefined if no intersection exists or +/-Infinity if the line is inside the corridor
  * the intersection with their lambdas are sorted so that lambda1 <= lambda2
  */
@@ -172,7 +156,7 @@ export function intersectLineCorridor(offset: Position, direction: RelativePosit
 			lambdaRightLine < lambdaLeftLine) {
 		return [intersectionRight, intersectionLeft, lambdaRightLine, lambdaLeftLine, lambdaRight, lambdaLeft];
 	}
-	return [intersectionLeft, intersectionRight, lambdaLeftLine, lambdaRightLine, lambdaRight, lambdaLeft];
+	return [intersectionLeft, intersectionRight, lambdaLeftLine, lambdaRightLine, lambdaLeft, lambdaRight];
 }
 
 /**
@@ -339,10 +323,20 @@ export function isInTriangle(a: Position, b: Position, c: Position, p: Position)
 	return v >= 0 && u + v <= 1;
 }
 
+/**
+ * Converts angle in degrees to angle in radians.
+ * @param angle - angle in degrees
+ * @returns angle in radians
+ */
 export function degreeToRadian(angleInDegree: number): number {
 	return angleInDegree * Math.PI / 180;
 }
 
+/**
+ * Converts angle in radians to angle in degrees.
+ * @param angle - angle in radians
+ * @returns angle in degrees
+ */
 export function radianToDegree(angleInRadian: number): number {
 	return angleInRadian * 180 / Math.PI;
 }
@@ -422,6 +416,13 @@ export function inscribedAngle(point1: Position, point2: Position, theta: number
 	return [centerOfCircleOne, centerOfCircleTwo, radius];
 }
 
+/**
+ * The corners don't have to be sorted, so corner1.x can be bigger or smaller than corner2.x without changing the result of this function.
+ * @param corner1 - first corner of rectangle
+ * @param corner2 - second corner of rectangle
+ * @param x - position to be tested
+ * @returns true if x is in rectangle described by corner1, corner2
+ */
 export function insideRect(corner1: Position, corner2: Position, x: Position): boolean {
 	let minCornerX, maxCornerX, minCornerY, maxCornerY;
 	if (corner1.x < corner2.x) {
@@ -438,7 +439,15 @@ export function insideRect(corner1: Position, corner2: Position, x: Position): b
 			minCornerY < x.y && x.y < maxCornerY;
 }
 
-export function isInStadium(a: Position, b: Position, radius: number, p: Position) {
+/**
+ * The positions a and b don't have to be sorted, so a.x can be bigger or smaller than b.x without changing the result of this function.
+ * @param a - first position of stadium
+ * @param b - second position of stadium
+ * @param radius - radius of sides of stadium
+ * @param p - position to be tested
+ * @returns true if p is in stadium described by positions a, b and the radius of its sides
+ */
+export function isInStadium(a: Position, b: Position, radius: number, p: Position): boolean {
 	const radiusSq = radius ** 2;
 	if (p.distanceToSq(a) < radiusSq) {
 		return true;
@@ -450,10 +459,69 @@ export function isInStadium(a: Position, b: Position, radius: number, p: Positio
 	return insideRect(a - offset, b + offset, p);
 }
 
+/**
+ * amin HAS to be smaller than amax for this to work.
+ * @param amin - minimum allowed angle
+ * @param val - angle to be bounded
+ * @param amax - maximum allowed angle
+ * @returns angle val bounded to be between amin vs amax
+ */
 export function angleBound(amin: number, val: number, amax: number): number {
 	if (val <= amax && val >= amin) return val;
 	let diffMin = Math.abs(getAngleDiff(amin, val));
 	let diffMax = Math.abs(getAngleDiff(amax, val));
 	if (diffMax < diffMin) return amax;
 	return amin;
+}
+
+/**
+ * Returns two angles, that enclose all angles in `angles`, as well as
+ * `center`, in counter-clockwise order. The return value also includes the
+ * angle difference.
+ *
+ * In other words, for a result `[a, b]`, the counter-clockwise order is:
+ *
+ * `a` -> first part of `angles` -> `center` -> second part of `angles` -> `b`
+ *
+ * where "first part of `angles`" and "second part of `angles`" are lists. Both
+ * lists may be empty, and thus `a` or `b` (or both) may be equal to `center`.
+ *
+ * There is no assumption whether angles are normalized in some form.
+ *
+ * @param center - The center angle.
+ * @param angles - The enclosing angles.
+ * @returns The first enclosing angle `a`
+ * @returns The second enclosing angle `b` (`a`, `b` are in counter-clockwise order)
+ * @returns The angle diff between `a` and `center`
+ * @returns The angle diff between `b` and `center`
+ */
+export function enclosingAngles(center: number, angles: number[]): [number, number, number, number] {
+	let firstAngle = center;
+	let firstDiff = 0;
+
+	let lastAngle = center;
+	let lastDiff = 0;
+
+	for (const current of angles) {
+		const currentDiff = getAngleDiff(center, current);
+		// current = center + currentDiff
+
+		if (currentDiff < 0) {
+			// current is counterclockwise to center
+
+			if (currentDiff < firstDiff) {
+				firstAngle = current;
+				firstDiff = currentDiff;
+			}
+		} else {
+			// current is clockwise to center
+
+			if (currentDiff > lastDiff) {
+				lastAngle = current;
+				lastDiff = currentDiff;
+			}
+		}
+	}
+
+	return [firstAngle, lastAngle, firstDiff, lastDiff];
 }

@@ -20,52 +20,36 @@
 
 #include "tracker.h"
 #include "balltracker.h"
-#include "protobuf/ssl_wrapper.pb.h"
+#include "protobuf/ssl_detection.pb.h"
+#include "protobuf/ssl_geometry.pb.h"
 #include "robotfilter.h"
 #include "protobuf/debug.pb.h"
 #include "protobuf/geometry.h"
+#include "protobuf/world.pb.h"
 #include "core/fieldtransform.h"
+#include "worldparameters.h"
 #include <QDebug>
-#include <iostream>
 #include <limits>
 
-Tracker::Tracker(bool robotsOnly, bool isSpeedTracker) :
+Tracker::Tracker(bool robotsOnly, bool isSpeedTracker, WorldParameters *m_worldParameters) :
     m_cameraInfo(new CameraInfo),
-    m_systemDelay(0),
+    m_visionTransmissionDelay(0),
     m_timeSinceLastReset(0),
-    m_geometryUpdated(false),
-    m_hasVisionData(false),
-    m_virtualFieldEnabled(false),
     m_lastSlowVisionFrame(0),
     m_numSlowVisionFrames(0),
     m_currentBallFilter(nullptr),
     m_aoiEnabled(false),
-    m_aoi_x1(0.0f),
-    m_aoi_y1(0.0f),
-    m_aoi_x2(0.0f),
-    m_aoi_y2(0.0f),
-    m_fieldTransform(new FieldTransform),
+    m_worldParameters(m_worldParameters),
     m_robotsOnly(robotsOnly),
     m_resetTimeout(isSpeedTracker ? .1E9 : .5E9),
     m_maxTimeLast(isSpeedTracker ? .2E9 : 1E9)
 {
-    geometrySetDefault(&m_geometry, true);
-    geometrySetDefault(&m_virtualFieldGeometry, true);
 }
 
 Tracker::~Tracker()
 {
     reset();
     delete m_cameraInfo;
-}
-
-static bool isInAOI(float detectionX, float detectionY, const FieldTransform &transform, float x1, float y1, float x2, float y2)
-{
-    float x = -detectionY / 1000.0f;
-    float y = detectionX / 1000.0f;
-    float xn = transform.applyPosX(x, y);
-    float yn = transform.applyPosY(x, y);
-    return (xn > x1 && xn < x2 && yn > y1 && yn < y2);
 }
 
 void Tracker::reset()
@@ -83,19 +67,11 @@ void Tracker::reset()
     qDeleteAll(m_ballFilter);
     m_ballFilter.clear();
 
-    m_hasVisionData = false;
     m_timeSinceLastReset = 0;
     m_lastUpdateTime.clear();
     m_visionPackets.clear();
     m_cameraInfo->cameraPosition.clear();
     m_cameraInfo->focalLength.clear();
-    m_cameraInfo->cameraSender.clear();
-}
-
-void Tracker::setFlip(bool flip)
-{
-    // used to change goals between blue and yellow
-    m_fieldTransform->setFlip(flip);
 }
 
 void Tracker::process(qint64 currentTime)
@@ -111,28 +87,7 @@ void Tracker::process(qint64 currentTime)
     invalidateRobots(m_robotFilterBlue, currentTime);
 
     for (const Packet &p : m_visionPackets) {
-        SSL_WrapperPacket wrapper;
-        if (!wrapper.ParseFromArray(p.data.data(), p.data.size())) {
-            continue;
-        }
-
-        if (wrapper.has_geometry() && !m_robotsOnly) {
-            convertFromSSlGeometry(wrapper.geometry().field(), m_geometry);
-            for (int i = 0; i < wrapper.geometry().calib_size(); ++i) {
-                updateCamera(wrapper.geometry().calib(i), p.sender);
-            }
-            m_geometryUpdated = true;
-        }
-
-        if (!m_robotsOnly) {
-            m_detectionWrappers.append({wrapper, p.time});
-        }
-
-        if (!wrapper.has_detection()) {
-            continue;
-        }
-
-        const SSL_DetectionFrame &detection = wrapper.detection();
+        const SSL_DetectionFrame &detection = p.detection;
         const qint64 visionProcessingTime = (detection.t_sent() - detection.t_capture()) * 1E9;
 
         /* Misconfigured or slow vision computers may produce detection frames
@@ -170,7 +125,7 @@ void Tracker::process(qint64 currentTime)
         }
 
         // time on the field for which the frame was captured as seen by this computers clock
-        const qint64 sourceTime = p.time - visionProcessingTime - m_systemDelay;
+        const qint64 sourceTime = p.time - visionProcessingTime - m_visionTransmissionDelay;
 
         // delayed reset to clear frames older than the reset command
         if (sourceTime > m_timeToReset) {
@@ -280,27 +235,15 @@ BallTracker* Tracker::bestBallFilter()
     return m_currentBallFilter;
 }
 
-static amun::DebugValues* mutable_debug(amun::DebugValues** adv, Status s)
-{
-    if (nullptr == *adv) {
-        *adv = s->add_debug();
-        (*adv)->set_source(amun::Tracking);
-    }
-    return *adv;
-}
-
-Status Tracker::worldState(qint64 currentTime, bool resetRaw)
+void Tracker::worldState(world::State *worldState, qint64 currentTime, bool resetRaw)
 {
     // only return objects which have been tracked for more than minFrameCount frames
     // if the tracker was reset recently, allow for fast repopulation
     const int minFrameCount = (currentTime > m_timeSinceLastReset + m_resetTimeout) ? 5: 0;
 
     // create world state for the given time
-    Status status(new amun::Status);
-    world::State *worldState = status->mutable_world_state();
     worldState->set_time(currentTime);
-    worldState->set_has_vision_data(m_hasVisionData);
-    worldState->set_system_delay(m_systemDelay);
+    worldState->set_vision_transmission_delay(m_visionTransmissionDelay);
 
     if (!m_robotsOnly) {
         BallTracker *ball = bestBallFilter();
@@ -315,7 +258,7 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
         RobotFilter *robot = bestFilter(*it, minFrameCount, m_desiredRobotCamera);
         if (robot != nullptr) {
             robot->update(currentTime);
-            robot->get(worldState->add_yellow(), *m_fieldTransform, false);
+            robot->get(worldState->add_yellow(), m_worldParameters->fieldTransform(), false);
             robotInfos.append(robot->getRobotInfo());
         }
     }
@@ -324,87 +267,75 @@ Status Tracker::worldState(qint64 currentTime, bool resetRaw)
         RobotFilter *robot = bestFilter(*it, minFrameCount, m_desiredRobotCamera);
         if (robot != nullptr) {
             robot->update(currentTime);
-            robot->get(worldState->add_blue(), *m_fieldTransform, false);
+            robot->get(worldState->add_blue(), m_worldParameters->fieldTransform(), false);
             robotInfos.append(robot->getRobotInfo());
         }
     }
 
     if (!m_robotsOnly) {
-        for (auto &data : m_detectionWrappers) {
-            worldState->add_vision_frames()->CopyFrom(data.first);
-            worldState->add_vision_frame_times(data.second);
-        }
-        m_detectionWrappers.clear();
-
         BallTracker *ball = bestBallFilter();
 
         if (ball != nullptr) {
             ball->update(currentTime);
             const qint64 lastCameraFrameTime = m_lastUpdateTime[ball->primaryCamera()];
-            ball->get(worldState->mutable_ball(), *m_fieldTransform, resetRaw, robotInfos, lastCameraFrameTime);
-        }
-    }
-
-    if (m_geometryUpdated && !m_robotsOnly) {
-        if (m_virtualFieldEnabled) {
-            status->mutable_geometry()->CopyFrom(m_virtualFieldGeometry);
-        } else {
-            status->mutable_geometry()->CopyFrom(m_geometry);
+            ball->get(worldState->mutable_ball(), m_worldParameters->fieldTransform(), resetRaw, robotInfos, lastCameraFrameTime);
         }
     }
 
     if (m_aoiEnabled) {
         world::TrackingAOI *aoi = worldState->mutable_tracking_aoi();
-        aoi->set_x1(m_aoi_x1);
-        aoi->set_y1(m_aoi_y1);
-        aoi->set_x2(m_aoi_x2);
-        aoi->set_y2(m_aoi_y2);
+        aoi->set_x1(m_aoi.x1());
+        aoi->set_y1(m_aoi.y1());
+        aoi->set_x2(m_aoi.x2());
+        aoi->set_y2(m_aoi.y2());
     }
+}
 
-    amun::DebugValues *debug = nullptr;
+bool Tracker::injectDebugValues(qint64 currentTime, amun::DebugValues *debug)
+{
 #ifdef ENABLE_TRACKING_DEBUG
     for (auto& filter : m_ballFilter) {
         if (filter == m_currentBallFilter) {
-            amun::DebugValue *debugValue = mutable_debug(&debug, status)->add_value();
+            amun::DebugValue *debugValue = debug->add_value();
             debugValue->set_key("active cam");
             debugValue->set_float_value(m_currentBallFilter->primaryCamera());
-            debug->MergeFrom(filter->debugValues());
-        } else {
-            mutable_debug(&debug, status)->MergeFrom(filter->debugValues());
         }
+
+        debug->MergeFrom(filter->debugValues());
+    }
+#endif
+
+    for (const QString &message : m_errorMessages) {
+        amun::StatusLog *log = debug->add_log();
+        log->set_timestamp(currentTime);
+        log->set_text(message.toStdString());
+    }
+
+#ifdef ENABLE_TRACKING_DEBUG
+    return true;
+#else
+    return m_errorMessages.size() > 0;
+#endif
+}
+
+void Tracker::clearDebugValues()
+{
+#ifdef ENABLE_TRACKING_DEBUG
+    for (auto& filter : m_ballFilter) {
         filter->clearDebugValues();
     }
 #endif
-    if (m_errorMessages.size() > 0 && !m_robotsOnly) {
-        for (const QString &message : m_errorMessages) {
-            amun::StatusLog *log = mutable_debug(&debug, status)->add_log();
-            log->set_timestamp(currentTime);
-            log->set_text(message.toStdString());
-        }
-        m_errorMessages.clear();
-    }
 
-    return status;
+    m_errorMessages.clear();
 }
 
-void Tracker::finishProcessing()
-{
-    m_geometryUpdated = false;
-}
-
-void Tracker::updateCamera(const SSL_GeometryCameraCalibration &c, QString sender)
+void Tracker::updateCamera(const SSL_GeometryCameraCalibration &c, const QString &sender)
 {
     if (!c.has_derived_camera_world_tx() || !c.has_derived_camera_world_ty()
             || !c.has_derived_camera_world_tz()) {
         return;
     }
 
-    auto lastSender = m_cameraInfo->cameraSender.find(c.camera_id());
-    if (lastSender != m_cameraInfo->cameraSender.end() && *lastSender != sender) {
-        m_errorMessages.append(QString("<font color=\"red\">WARNING: </font> camera %1 is being sent\
-                                    from two different vision sources: %2 and %3!").arg(c.camera_id())
-                                   .arg(m_cameraInfo->cameraSender[c.camera_id()]).arg(sender));
-    }
     Eigen::Vector3f cameraPos;
     cameraPos(0) = -c.derived_camera_world_ty() / 1000.f;
     cameraPos(1) = c.derived_camera_world_tx() / 1000.f;
@@ -412,7 +343,6 @@ void Tracker::updateCamera(const SSL_GeometryCameraCalibration &c, QString sende
 
     m_cameraInfo->cameraPosition[c.camera_id()] = cameraPos;
     m_cameraInfo->focalLength[c.camera_id()] = c.focal_length();
-    m_cameraInfo->cameraSender[c.camera_id()] = sender;
 }
 
 void Tracker::invalidateRobotFilter(QList<RobotFilter*> &filters, const qint64 maxTime, const qint64 maxTimeLast, qint64 currentTime)
@@ -553,7 +483,7 @@ static RobotInfo nearestRobotInfo(const QList<RobotFilter *> &robots, const SSL_
     return nearestRobot;
 }
 
-void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiveTime, qint64 visionProcessingDelay)
+void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 sourceTime, qint64 visionProcessingDelay)
 {
     const qint64 captureTime = frame.t_capture() * 1E9;
     const quint32 cameraId = frame.camera_id();
@@ -562,13 +492,13 @@ void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiv
         return;
     }
 
-    const QList<RobotFilter*> bestRobots = getBestRobots(receiveTime, frame.camera_id());
+    const QList<RobotFilter*> bestRobots = getBestRobots(sourceTime, frame.camera_id());
 
     std::vector<VisionFrame> ballFrames;
     ballFrames.reserve(frame.balls_size());
     for (int i = 0; i < frame.balls_size(); i++) {
 
-        if (m_aoiEnabled && !isInAOI(frame.balls(i).x(), frame.balls(i).y() , *m_fieldTransform, m_aoi_x1, m_aoi_y1, m_aoi_x2, m_aoi_y2)) {
+        if (m_aoiEnabled && !m_aoi.containsVision({ frame.balls(i).x(), frame.balls(i).y() }, m_worldParameters->fieldTransform())) {
             continue;
         }
 
@@ -582,7 +512,7 @@ void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiv
 
         if (nearCount <= MAX_NEAR_COUNT) {
             const RobotInfo robotInfo = nearestRobotInfo(bestRobots, frame.balls(i));
-            ballFrames.push_back(VisionFrame(frame.balls(i), receiveTime, cameraId, robotInfo, visionProcessingDelay, captureTime));
+            ballFrames.push_back(VisionFrame(frame.balls(i), sourceTime, cameraId, robotInfo, visionProcessingDelay, captureTime));
         }
     }
 
@@ -594,7 +524,7 @@ void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiv
     std::vector<bool> acceptingFilterWithCamId(ballFrames.size(), false);
     std::vector<BallTracker*> acceptingFilterWithOtherCamId(ballFrames.size(), nullptr);
     for (BallTracker *filter : m_ballFilter) {
-        filter->update(receiveTime);
+        filter->update(sourceTime);
 
         // from a given vision packet, each filter can only accept one detection,
         // since it is not possible to see the true ball multiple times
@@ -621,7 +551,7 @@ void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiv
                 bt = new BallTracker(*acceptingFilterWithOtherCamId[i], cameraId);
             } else {
                 // create new Ball Filter without initial movement
-                bt = new BallTracker(ballFrames[i], m_cameraInfo, *m_fieldTransform, m_ballModel);
+                bt = new BallTracker(ballFrames[i], m_cameraInfo, m_worldParameters->fieldTransform(), m_ballModel);
             }
             m_ballFilter.append(bt);
             bt->addVisionFrame(ballFrames[i]);
@@ -634,14 +564,14 @@ void Tracker::trackBallDetections(const SSL_DetectionFrame &frame, qint64 receiv
     }
 }
 
-void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qint64 receiveTime, qint32 cameraId,
+void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qint64 sourceTime, qint32 cameraId,
                          qint64 visionProcessingDelay, bool teamIsYellow)
 {
     if (!robot.has_robot_id()) {
         return;
     }
 
-    if (m_aoiEnabled && !isInAOI(robot.x(), robot.y() , *m_fieldTransform, m_aoi_x1, m_aoi_y1, m_aoi_x2, m_aoi_y2)) {
+    if (m_aoiEnabled && !m_aoi.containsVision({ robot.x(), robot.y() }, m_worldParameters->fieldTransform())) {
         return;
     }
 
@@ -658,12 +588,12 @@ void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qi
 
     QList<RobotFilter*>& list = robotMap[robot.robot_id()];
     for (RobotFilter *filter : list) {
-        filter->update(receiveTime);
+        filter->update(sourceTime);
         const float dist = filter->distanceTo(robot);
         if (dist > MAX_DISTANCE) {
             continue;
         }
-        const bool isYoung = receiveTime - filter->lastPrimaryTime() > PRIMARY_TIMEOUT;
+        const bool isYoung = sourceTime - filter->lastPrimaryTime() > PRIMARY_TIMEOUT;
         if (static_cast<qint32>(filter->primaryCamera()) != cameraId && isYoung) {
             continue;
         }
@@ -680,7 +610,7 @@ void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qi
     }
 
     if (!totalClosest) {
-        totalClosest = new RobotFilter(robot, receiveTime, teamIsYellow);
+        totalClosest = new RobotFilter(robot, sourceTime, teamIsYellow);
         list.append(totalClosest);
         nearestFilterByCamera[cameraId] = {totalClosestDist, totalClosest};
     }
@@ -695,14 +625,13 @@ void Tracker::trackRobot(RobotMap &robotMap, const SSL_DetectionRobot &robot, qi
 
     for (const auto &[id, data] : nearestFilterByCamera) {
         RobotFilter *filter = data.second;
-        filter->addVisionFrame(cameraId, robot, receiveTime, visionProcessingDelay, id == cameraId && createOwnCameraFilter);
+        filter->addVisionFrame(cameraId, robot, sourceTime, visionProcessingDelay, id == cameraId && createOwnCameraFilter);
     }
 }
 
-void Tracker::queuePacket(const QByteArray &packet, qint64 time, QString sender)
+void Tracker::queuePacket(const SSL_DetectionFrame &detection, qint64 time)
 {
-    m_visionPackets.append(Packet(packet, time, sender));
-    m_hasVisionData = true;
+    m_visionPackets.append(Packet(detection, time));
 }
 
 void Tracker::queueRadioCommands(const QList<robot::RadioCommand> &radio_commands, qint64 time)
@@ -729,38 +658,20 @@ void Tracker::handleCommand(const amun::CommandTracking &command, qint64 time)
     }
 
     if (command.has_aoi()) {
-        m_aoi_x1 = command.aoi().x1();
-        m_aoi_y1 = command.aoi().y1();
-        m_aoi_x2 = command.aoi().x2();
-        m_aoi_y2 = command.aoi().y2();
+        m_aoi = AreaOfInterest {
+            command.aoi().x1(),
+            command.aoi().y1(),
+            command.aoi().x2(),
+            command.aoi().y2()
+        };
     }
 
-    if (command.has_system_delay()) {
-        m_systemDelay = command.system_delay();
+    if (command.has_vision_transmission_delay()) {
+        m_visionTransmissionDelay = command.vision_transmission_delay();
     }
 
     // allows resetting by the strategy
     if (command.reset()) {
         m_timeToReset = time;
-    }
-
-    if (command.has_field_transform()) {
-        const auto &tr = command.field_transform();
-        std::array<float, 6> transform({tr.a11(), tr.a12(), tr.a21(), tr.a22(), tr.offsetx(), tr.offsety()});
-        m_fieldTransform->setTransform(transform);
-    }
-
-    if (command.has_enable_virtual_field()) {
-        m_virtualFieldEnabled = command.enable_virtual_field();
-        // reset transform
-        if (!command.enable_virtual_field()) {
-            m_fieldTransform->setTransform({1, 0, 0, 1, 0, 0});
-        }
-        m_geometryUpdated = true;
-    }
-
-    if (command.has_virtual_geometry()) {
-        m_geometryUpdated = true;
-        m_virtualFieldGeometry.CopyFrom(command.virtual_geometry());
     }
 }

@@ -26,9 +26,9 @@
       <property name="geometry">
        <rect>
         <x>0</x>
-        <y>-482</y>
-        <width>411</width>
-        <height>1236</height>
+        <y>-240</y>
+        <width>426</width>
+        <height>969</height>
        </rect>
       </property>
       <property name="maximumSize">
@@ -307,24 +307,53 @@
          <layout class="QFormLayout" name="formLayout_3">
           <item row="0" column="0">
            <widget class="QLabel" name="label_2">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Models the delay between &quot;photon hits robot&quot; to &quot;vision package is received&quot;, but without the time the vision needed to process.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
             <property name="text">
-             <string>System delay</string>
+             <string>Vision transmission delay</string>
             </property>
            </widget>
           </item>
           <item row="0" column="1">
-           <widget class="QSpinBox" name="systemDelayBox">
+           <widget class="QSpinBox" name="visionTransmissionDelayBox">
             <property name="sizePolicy">
              <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
               <horstretch>0</horstretch>
               <verstretch>0</verstretch>
              </sizepolicy>
             </property>
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Models the delay between &quot;photon hits robot&quot; to &quot;vision package is received&quot;, but without the time the vision needed to process.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
             <property name="suffix">
              <string> ms</string>
             </property>
             <property name="value">
              <number>30</number>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QSpinBox" name="commandDelayBox">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delay between a tracker predicting the world state for the strategy and a robot being able to act on that command (i.e. robot receives command and had time to match the desired accelerations).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="suffix">
+             <string> ms</string>
+            </property>
+            <property name="maximum">
+             <number>1000</number>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="label_12">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delay between a tracker predicting the world state for the strategy and a robot being able to act on that command (i.e. robot receives command and had time to match the desired accelerations).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="text">
+             <string>Command delay</string>
             </property>
            </widget>
           </item>

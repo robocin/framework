@@ -35,6 +35,12 @@ if(WIN32)
 	list(APPEND LIBGIT_INCLUDE_LIBS ws2_32)
 endif()
 
+if("${CMAKE_C_FLAGS}" STREQUAL "")
+  set(LIB_GIT_C_FLAGS "-w")
+else()
+  set(LIB_GIT_C_FLAGS "${CMAKE_C_FLAGS} -w")
+endif()
+
 ExternalProject_Add(project_libgit2
     URL https://downloads.robotics-erlangen.de/libgitv1.3.0.zip
     URL_HASH SHA256=26bc8d7d04cdc10941a3c0c9dfa1b5b248a2b108154f1b6b4b5054a5bab2646e
@@ -48,7 +54,8 @@ ExternalProject_Add(project_libgit2
         -DWINHTTP:STRING=OFF
         -DCMAKE_C_COMPILER:PATH=${CMAKE_C_COMPILER}
         -DCMAKE_BUILD_TYPE:STRING=Release
-        -DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS}
+        -DCMAKE_C_FLAGS:STRING=${LIB_GIT_C_FLAGS}
+        -DCMAKE_INSTALL_MESSAGE:STRING=NEVER
     BUILD_BYPRODUCTS
             "<INSTALL_DIR>/${LIBGIT_SUBPATH}"
     DOWNLOAD_DIR "${DEPENDENCY_DOWNLOADS}"
@@ -60,13 +67,14 @@ EPHelper_Add_Cleanup(project_libgit2 bin include lib share)
 EPHelper_Add_Clobber(project_libgit2 ${CMAKE_CURRENT_LIST_DIR}/libgit.patch)
 
 externalproject_get_property(project_libgit2 install_dir)
-
-add_library(lib::git2 UNKNOWN IMPORTED)
-add_dependencies(lib::git2 project_libgit2)
 # cmake enforces that the include directory exists
 file(MAKE_DIRECTORY "${install_dir}/include/")
-set_target_properties(lib::git2 PROPERTIES
+
+add_library(project_libgit2_import UNKNOWN IMPORTED)
+set_target_properties(project_libgit2_import PROPERTIES
     IMPORTED_LOCATION "${install_dir}/${LIBGIT_SUBPATH}"
     INTERFACE_LINK_LIBRARIES "${install_dir}/${LIBGIT_SUBPATH};${LIBGIT_INCLUDE_LIBS}"
     INTERFACE_INCLUDE_DIRECTORIES "${install_dir}/include/"
 )
+
+EPHelper_Add_Interface_Library(PROJECT project_libgit2 ALIAS lib::git2)

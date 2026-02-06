@@ -4,7 +4,7 @@ module.exports = {
     },
     "parser": "@typescript-eslint/parser",
     "parserOptions": {
-        "project": "tsconfig.json",
+        "project": "strategy/typescript/tsconfig.json",
         "sourceType": "module"
     },
     "plugins": [
@@ -18,6 +18,7 @@ module.exports = {
     ],
     "root": true,
     "rules": {
+        "@typescript-eslint/explicit-member-accessibility": "error",
         "@typescript-eslint/adjacent-overload-signatures": "error",
         "@typescript-eslint/ban-types": [
             "error",
@@ -121,6 +122,81 @@ module.exports = {
             },
 
             {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "snake_case"],
+                "modifiers": ["private"],
+                "leadingUnderscore": "require",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["UPPER_CASE"],
+                "modifiers": ["private", "static", "readonly"],
+                "leadingUnderscore": "require",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "snake_case"],
+                "modifiers": ["private", "static"],
+                "leadingUnderscore": "require",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "UPPER_CASE"],
+                "modifiers": ["private", "readonly"],
+                "leadingUnderscore": "require",
+            },
+
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "snake_case"],
+                "modifiers": ["protected"],
+                "leadingUnderscore": "require",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["UPPER_CASE"],
+                "modifiers": ["protected", "static", "readonly"],
+                "leadingUnderscore": "require",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "snake_case"],
+                "modifiers": ["protected", "static"],
+                "leadingUnderscore": "require",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "UPPER_CASE"],
+                "modifiers": ["protected", "readonly"],
+                "leadingUnderscore": "require",
+            },
+
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "snake_case"],
+                "modifiers": ["public"],
+                "leadingUnderscore": "forbid",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["UPPER_CASE"],
+                "modifiers": ["public", "static", "readonly"],
+                "leadingUnderscore": "forbid",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "snake_case"],
+                "modifiers": ["public", "static"],
+                "leadingUnderscore": "forbid",
+            },
+            {
+                "selector": ["classProperty", "classMethod"],
+                "format": ["camelCase", "UPPER_CASE"],
+                "modifiers": ["public", "readonly"],
+                "leadingUnderscore": "forbid",
+            },
+
+            {
                 "selector": "classProperty",
                 "format": ["camelCase", "snake_case"],
                 "leadingUnderscore": "allow",
@@ -153,6 +229,12 @@ module.exports = {
             {
                 "selector": "typeProperty",
                 "format": ["camelCase", "snake_case"],
+                "leadingUnderscore": "allow",
+            },
+            {
+                "selector": "typeProperty",
+                "format": ["camelCase", "UPPER_CASE"],
+                "modifiers": ["readonly"],
                 "leadingUnderscore": "allow",
             },
 
@@ -331,18 +413,6 @@ module.exports = {
         ],
         "no-return-await": "error",
         "eqeqeq": "off",
-        // this is a workaround, because eqeqeq does not allow making undefined an exception
-        "no-restricted-syntax": [
-            "error",
-            {
-                "selector": "BinaryExpression[operator='=='][left.name!='undefined'][right.name!='undefined']",
-                "message": "Comparison with == is only allowed when comparing with undefined, because JavaScript is cursed. Use === instead."
-            },
-            {
-                "selector": "BinaryExpression[operator='!='][left.name!='undefined'][right.name!='undefined']",
-                "message": "Comparison with != is only allowed when comparing with undefined, because JavaScript is cursed. Use !== instead."
-            },
-        ],
         "no-sparse-arrays": "error",
         "no-template-curly-in-string": "error",
         "no-throw-literal": "error",
@@ -469,5 +539,6 @@ module.exports = {
 
         "erforce/no-unnecessary-function-wrapper": "error",
         "erforce/check-typecast-spacing": "error",
+        "erforce/eqeqeq": "error",
     }
 };

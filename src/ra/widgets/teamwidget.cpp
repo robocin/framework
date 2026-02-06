@@ -19,7 +19,9 @@
  ***************************************************************************/
 
 #include "teamwidget.h"
+#include "automaticentrypointdialog.h"
 #include "config/config.h"
+#include "entrypointselectiontoolbutton.h"
 #include "protobuf/command.pb.h"
 #include "protobuf/status.pb.h"
 #include <QAction>
@@ -29,6 +31,7 @@
 #include <QSettings>
 #include <QToolButton>
 #include <QMenu>
+#include <iterator>
 
 TeamWidget::TeamWidget(QWidget *parent) :
     QFrame(parent),
@@ -58,12 +61,27 @@ void TeamWidget::saveConfig()
     s.setValue("AutoReload", m_userAutoReload);
     s.setValue("EnableDebug", m_btnEnableDebug->isChecked());
     s.setValue("PerformanceMode", m_performanceAction->isChecked());
+
+    auto saveAutomaticEntrypoint = [&s](const QString& name, const QString& entrypoint) {
+        if (entrypoint.isNull()) {
+            s.remove(name);
+        } else {
+            s.setValue(name, entrypoint);
+        }
+    };
+    s.beginGroup("AutomaticEntrypoints");
+    saveAutomaticEntrypoint("game", m_automaticEntrypoints.forGame);
+    saveAutomaticEntrypoint("break", m_automaticEntrypoints.forBreak);
+    saveAutomaticEntrypoint("postgame", m_automaticEntrypoints.forPostgame);
+    s.endGroup();
+
     s.endGroup();
 }
 
-void TeamWidget::init(amun::StatusStrategyWrapper::StrategyType type)
+void TeamWidget::init(amun::StatusStrategyWrapper::StrategyType type, bool tournamentMode)
 {
     m_type = type;
+    m_isTournamentMode = tournamentMode;
 
     QBoxLayout *hLayout = new QHBoxLayout(this);
     hLayout->setMargin(4);
@@ -77,8 +95,6 @@ void TeamWidget::init(amun::StatusStrategyWrapper::StrategyType type)
     connect(action, SIGNAL(triggered()), SLOT(showOpenDialog()));
     connect(m_scriptMenu, SIGNAL(aboutToShow()), SLOT(prepareScriptMenu()));
 
-    m_entryPoints = new QMenu(this);
-
     m_btnOpen = new QToolButton;
     m_btnOpen->setText("Disabled");
     m_btnOpen->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -87,13 +103,8 @@ void TeamWidget::init(amun::StatusStrategyWrapper::StrategyType type)
     connect(m_btnOpen, SIGNAL(clicked()), SLOT(showOpenDialog()));
     hLayout->addWidget(m_btnOpen);
 
-    m_btnEntryPoint = new QToolButton;
-    m_btnEntryPoint->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_btnEntryPoint->setText("<n/a>");
-    m_btnEntryPoint->setVisible(false);
-    m_btnEntryPoint->setPopupMode(QToolButton::InstantPopup);
-    m_btnEntryPoint->setMenu(m_entryPoints);
-    connect(m_btnEntryPoint, SIGNAL(triggered(QAction*)), SLOT(selectEntryPoint(QAction*)));
+    m_btnEntryPoint = new EntrypointSelectionToolButton { m_type };
+    connect(m_btnEntryPoint, &EntrypointSelectionToolButton::entrypointSelected, this, &TeamWidget::sendFilenameAndEntrypoint);
     hLayout->addWidget(m_btnEntryPoint);
 
     QIcon debugIcon;
@@ -115,6 +126,10 @@ void TeamWidget::init(amun::StatusStrategyWrapper::StrategyType type)
     m_reloadAction = reload_menu->addAction("Reload automatically");
     m_reloadAction->setCheckable(true);
     connect(m_reloadAction, SIGNAL(toggled(bool)), SLOT(sendAutoReload()));
+    if (m_isTournamentMode) {
+        m_reloadAction->setEnabled(false);
+        m_reloadAction->setChecked(true);
+    }
 
     m_debugAction = reload_menu->addAction("Trigger debugger");
     m_debugAction->setEnabled(false);
@@ -124,6 +139,9 @@ void TeamWidget::init(amun::StatusStrategyWrapper::StrategyType type)
     m_performanceAction->setCheckable(true);
     m_performanceAction->setChecked(true);
     connect(m_performanceAction, SIGNAL(toggled(bool)), SLOT(sendPerformanceDebug(bool)));
+
+    m_automaticEntrypointAction = reload_menu->addAction("Edit automatic entrypoints");
+    connect(m_automaticEntrypointAction, &QAction::triggered, this, &TeamWidget::showAutomaticEntrypointDialog);
 
     m_btnReload = new QToolButton;
     m_btnReload->setToolTip("Reload script");
@@ -158,11 +176,14 @@ void TeamWidget::enableContent(bool enable)
     m_btnOpen->setEnabled(enable);
     m_btnEntryPoint->setEnabled(enable);
     m_btnReload->blockSignals(!enable);
-    m_reloadAction->setEnabled(enable);
     m_btnEnableDebug->setEnabled(enable && m_type != amun::StatusStrategyWrapper::AUTOREF);
     m_debugAction->setEnabled(enable);
     m_performanceAction->setEnabled(enable);
     m_contentEnabled = enable;
+
+    if (!m_isTournamentMode) {
+        m_reloadAction->setEnabled(enable);
+    }
 }
 
 void TeamWidget::load()
@@ -184,15 +205,25 @@ void TeamWidget::load()
     }
 
     m_entryPoint = s.value("EntryPoint").toString();
-    m_reloadAction->setChecked(s.value("AutoReload").toBool());
+    if (!m_isTournamentMode) {
+        m_reloadAction->setChecked(s.value("AutoReload").toBool());
+    }
     m_performanceAction->setChecked(s.value("PerformanceMode", true).toBool());
     if (m_type != amun::StatusStrategyWrapper::AUTOREF) {
         m_btnEnableDebug->setChecked(s.value("EnableDebug", false).toBool());
     }
+
+    s.beginGroup("AutomaticEntrypoints");
+    m_automaticEntrypoints.forGame = s.value("game").toString();
+    m_automaticEntrypoints.forBreak = s.value("break").toString();
+    m_automaticEntrypoints.forPostgame = s.value("postgame").toString();
+    s.endGroup();
+
     s.endGroup();
 
     if (QFileInfo::exists(m_filename)) {
-        selectEntryPoint(m_entryPoint);
+        sendFilenameAndEntrypoint(m_entryPoint);
+        sendAutomaticEntrypoints();
     }
 }
 
@@ -205,12 +236,19 @@ void TeamWidget::setRecentScripts(std::shared_ptr<QStringList> recent)
 
 void TeamWidget::forceAutoReload(bool force)
 {
-    // must be updated before call to setChecked!
-    m_reloadAction->setDisabled(force); // disable when forced
-    if (force) {
-        m_reloadAction->setChecked(true);
+    // If m_isTournamentMode == true the reload action should be disabled anyways, but check it just to be sure.
+    if (!m_isTournamentMode && m_reloadAction->isEnabled()) {
+        // must be updated before call to setChecked!
+        m_reloadAction->setDisabled(force); // disable when forced
+        if (force) {
+            m_reloadAction->setChecked(true);
+        } else {
+            m_reloadAction->setChecked(m_userAutoReload);
+        }
     } else {
-        m_reloadAction->setChecked(m_userAutoReload);
+        // If the widget is disabled and we are in tournament mode just call sendAutoReload directly,
+        // because it should already be checked and this way we avoid an unnecessary signal/slot interaction
+        sendAutoReload();
     }
 }
 
@@ -229,25 +267,16 @@ void TeamWidget::handleStatus(const Status &status)
     }
 
     if (strategy) {
-        // only show entrypoint selection if > 0 entry points available
-        m_btnEntryPoint->setVisible(strategy->entry_point_size() > 0);
+        m_lastSentEntrypoints.clear();
+        m_lastSentEntrypoints.reserve(strategy->entry_point_size());
+        const auto& lastSentEntrypoints = strategy->entry_point();
+        std::transform(
+            lastSentEntrypoints.begin(), lastSentEntrypoints.end(),
+            std::back_inserter(m_lastSentEntrypoints), &QString::fromStdString);
 
-        // rebuild entrypoint menu
-        m_entryPoints->clear();
-        for (int i = 0; i < strategy->entry_point_size(); i++) {
-            const QString name = QString::fromStdString(strategy->entry_point(i));
-            addEntryPoint(m_entryPoints, name, name);
-        }
-
-        // show entrypoint name
-        if (strategy->has_current_entry_point()) {
-            m_entryPoint = QString::fromStdString(strategy->current_entry_point());
-            QString shortEntryPoint = shortenEntrypointName(m_entryPoints, m_entryPoint, 20);
-            m_btnEntryPoint->setText(shortEntryPoint);
-        } else {
-            m_entryPoint = QString();
-            m_btnEntryPoint->setText("<n/a>");
-        }
+        m_btnEntryPoint->setEntrypointList(m_lastSentEntrypoints);
+        m_btnEntryPoint->setCurrentEntrypoint(strategy->has_current_entry_point()
+            ? QString::fromStdString(strategy->current_entry_point()) : QString{});
 
         // strategy name
         m_btnOpen->setText(QString::fromStdString(strategy->name()));
@@ -356,12 +385,31 @@ QString TeamWidget::shortenEntrypointName(const QMenu *menu, const QString &name
 
 void TeamWidget::showOpenDialog()
 {
-    QString filename = QFileDialog::getOpenFileName(this, "Open script", QString(), QString("Lua/Ts script entrypoint (init.lua init.ts)"));
+    QString filename = QFileDialog::getOpenFileName(this, "Open script", QString(), QString("Lua/Ts script entrypoint (init.lua init.ts this-filter-is-required-to-stop-this-from-breaking.see-commit-msg.i-hate-this.?)"));
     if (filename.isNull()) {
         return;
     }
 
     open(filename);
+}
+
+void TeamWidget::showAutomaticEntrypointDialog()
+{
+    AutomaticEntrypointDialog *dialog = new AutomaticEntrypointDialog { m_automaticEntrypoints, m_lastSentEntrypoints, m_type, this };
+    bool accepted = dialog->exec();
+
+    if (!accepted) {
+        return;
+    }
+
+    AutomaticEntrypointsStorage newlySelected = dialog->selectedEntrypoints();
+
+    if (newlySelected == m_automaticEntrypoints) {
+        return;
+    }
+
+    m_automaticEntrypoints = std::move(newlySelected);
+    sendAutomaticEntrypoints();
 }
 
 void TeamWidget::open()
@@ -441,8 +489,10 @@ void TeamWidget::prepareScriptMenu()
     }
 }
 
-void TeamWidget::selectEntryPoint(const QString &entry_point)
+void TeamWidget::sendFilenameAndEntrypoint(const QString &entry_point)
 {
+    m_entryPoint = entry_point;
+
     Command command(new amun::Command);
     amun::CommandStrategyLoad *strategy = commandStrategyFromType(command)->mutable_load();
 
@@ -450,11 +500,6 @@ void TeamWidget::selectEntryPoint(const QString &entry_point)
     strategy->set_entry_point(entry_point.toStdString());
 
     emit sendCommand(command);
-}
-
-void TeamWidget::selectEntryPoint(QAction* action)
-{
-    selectEntryPoint(action->data().toString());
 }
 
 void TeamWidget::sendReload()
@@ -502,6 +547,51 @@ void TeamWidget::sendPerformanceDebug(bool enable)
     amun::CommandStrategy *strategy = commandStrategyFromType(command);
 
     strategy->set_performance_mode(enable);
+    emit sendCommand(command);
+}
+
+void TeamWidget::sendAutomaticEntrypoints()
+{
+    if (m_automaticEntrypoints.allNull()) {
+        return;
+    }
+
+    Command command(new amun::Command);
+    amun::CommandStrategyAutomaticEntrypoints *automatic_entrypoints = commandStrategyFromType(command)->mutable_automatic_entrypoints();
+
+    auto add_mapping = [automatic_entrypoints](SSL_Referee::Stage stage, const QString& entrypoint) {
+        auto *mapping = automatic_entrypoints->add_mapping();
+        mapping->set_stage(stage);
+        mapping->set_entry_point(entrypoint.toStdString());
+    };
+
+    if (!m_automaticEntrypoints.forGame.isNull()) {
+        for (const auto stage : {
+                SSL_Referee::NORMAL_SECOND_HALF_PRE,
+                SSL_Referee::NORMAL_SECOND_HALF,
+                SSL_Referee::EXTRA_FIRST_HALF_PRE,
+                SSL_Referee::EXTRA_FIRST_HALF,
+                SSL_Referee::EXTRA_SECOND_HALF_PRE,
+                SSL_Referee::EXTRA_SECOND_HALF,
+                SSL_Referee::PENALTY_SHOOTOUT,
+            }) {
+            add_mapping(stage, m_automaticEntrypoints.forGame);
+        }
+    }
+    if (!m_automaticEntrypoints.forBreak.isNull()) {
+        for (const auto stage : {
+                SSL_Referee::NORMAL_HALF_TIME,
+                SSL_Referee::EXTRA_TIME_BREAK,
+                SSL_Referee::EXTRA_HALF_TIME,
+                SSL_Referee::PENALTY_SHOOTOUT_BREAK,
+            }) {
+            add_mapping(stage, m_automaticEntrypoints.forBreak);
+        }
+    }
+    if (!m_automaticEntrypoints.forPostgame.isNull()) {
+        add_mapping(SSL_Referee::POST_GAME, m_automaticEntrypoints.forPostgame);
+    }
+
     emit sendCommand(command);
 }
 

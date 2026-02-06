@@ -26,30 +26,43 @@
 #include "trajectoryinput.h"
 #include "accelerationprofile.h"
 
+#include <cassert>
 #include <vector>
 #include <array>
 
 class AlphaTimeTrajectory;
-class SpeedProfile;
 
 template<typename T, std::size_t n>
 class StaticVector {
 public:
     void push_back(const T &e) {
+        assert(counter < n);
         elements[counter] = e;
         counter++;
     }
 
     const T& operator[](std::size_t index) const {
+        assert(index < n);
         return elements[index];
     }
 
     T& operator[](std::size_t index) {
+        assert(index < n);
         return elements[index];
     }
 
     const T& back() const {
+        assert(counter > 0);
         return elements[counter - 1];
+    }
+
+    T& back() {
+        assert(counter > 0);
+        return elements[counter - 1];
+    }
+
+    std::size_t capacity() {
+        return n;
     }
 
     std::size_t size() const {
@@ -57,6 +70,7 @@ public:
     }
 
     void resize(std::size_t numElements) {
+        assert(numElements <= n);
         counter = numElements;
     }
 
@@ -65,7 +79,7 @@ private:
     int counter = 0;
 };
 
-class SpeedProfile1D {
+class Trajectory1D {
 public:
     struct VT {
         float v;
@@ -74,27 +88,28 @@ public:
 
 public:
     void integrateTime();
+    void printDebug() const;
 
     struct TrajectoryPosInfo1D {
         float endPos;
         float increaseAtSpeed;
     };
 
-    [[nodiscard]] static SpeedProfile1D createLinearSpeedSegment(float v0, float v1, float time);
+    [[nodiscard]] static Trajectory1D createLinearSpeedSegment(float v0, float v1, float time);
 
     // helper functions
     // WARNING: assumes that the input is valid and solvable
     [[nodiscard]] static TrajectoryPosInfo1D calculateEndPos1DFastSpeed(float v0, float v1, float time, bool directionPositive, float acc, float vMax);
-    [[nodiscard]] static SpeedProfile1D calculate1DTrajectoryFastEndSpeed(float v0, float v1, float time, bool directionPositive, float acc, float vMax);
+    [[nodiscard]] static Trajectory1D calculate1DTrajectoryFastEndSpeed(float v0, float v1, float time, bool directionPositive, float acc, float vMax);
 
     [[nodiscard]] static TrajectoryPosInfo1D calculateEndPos1D(float v0, float v1, float hintDist, float acc, float vMax);
-    [[nodiscard]] static SpeedProfile1D calculate1DTrajectory(float v0, float v1, float extraTime, bool directionPositive, float acc, float vMax);
+    [[nodiscard]] static Trajectory1D calculate1DTrajectory(float v0, float v1, float extraTime, bool directionPositive, float acc, float vMax);
 
     // Creates a single acceleration and brake segment that takes exactly "time" seconds
     // and travels "distance" meters. The acceleration can become arbitrarily large.
     // Maximum speed is not considered and has to be checked by the caller.
     // Limitations: sign(v0) == sign(distance) && (sign(v1) == sign(distance) || v1 == 0)
-    [[nodiscard]] static SpeedProfile1D create1DAccelerationByDistance(float v0, float v1, float time, float distance);
+    [[nodiscard]] static Trajectory1D create1DAccelerationByDistance(float v0, float v1, float time, float distance);
 
     float initialAcceleration() const {
         return (profile[1].v - profile[0].v) / (profile[1].t - profile[0].t);
@@ -114,8 +129,7 @@ class Trajectory {
 public:
 
     Trajectory() = default;
-    Trajectory(const SpeedProfile1D &xProfile, const SpeedProfile1D &yProfile,
-               Vector startPos, float slowDownTime);
+    Trajectory(const Trajectory1D &xProfile, const Trajectory1D &yProfile, Vector startPos, float slowDownTime);
 
     float getSlowDownTime() const { return slowDownTime; }
 
@@ -123,7 +137,7 @@ public:
     void limitToTime(float time);
 
     void setCorrectionOffset(Vector offset) {
-        correctionOffsetPerSecond = offset / time();
+        correctionSpeed = offset / endTime();
     }
 
     void setStartPos(Vector pos) {
@@ -131,7 +145,7 @@ public:
     }
 
 
-    float time() const;
+    float endTime() const;
     Vector endPosition() const;
     RobotState stateAtTime(float time) const;
     std::vector<TrajectoryPoint> trajectoryPositions(std::size_t count, float timeInterval, float timeOffset) const;
@@ -177,7 +191,7 @@ public:
 private:
     StaticVector<VT, 6> profile{};
     Vector s0{0, 0};
-    Vector correctionOffsetPerSecond{0, 0};
+    Vector correctionSpeed{0, 0};
     float slowDownTime{0};
 };
 

@@ -18,9 +18,6 @@
 # *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
 # ***************************************************************************
 
-
-#add_compile_definitions(PATHFINDING_DEBUG)
-
 set(path_files
     include/path/alphatimetrajectory.h
     include/path/abstractpath.h
@@ -36,7 +33,7 @@ set(path_files
     include/path/escapeobstaclesampler.h
     include/path/standardsampler.h
     include/path/pathdebug.h
-    include/path/speedprofile.h
+    include/path/trajectory.h
     include/path/multiescapesampler.h
     include/path/parameterization.h
     include/path/trajectoryinput.h
@@ -53,7 +50,7 @@ set(path_files
     escapeobstaclesampler.cpp
     standardsampler.cpp
     pathdebug.cpp
-    speedprofile.cpp
+    trajectory.cpp
     multiescapesampler.cpp
     parameterization.cpp
 )
@@ -61,10 +58,12 @@ set(path_files
 add_library(path STATIC ${path_files})
 target_link_libraries(path
     PRIVATE shared::core
+    PUBLIC lib::googletest
     PUBLIC shared::protobuf
     PUBLIC Qt5::Core
     PRIVATE shared::config
 )
+add_dependencies(path lib::googletest)
 target_include_directories(path
     INTERFACE include
     PRIVATE include/path
@@ -75,6 +74,7 @@ add_library(amun::path ALIAS path)
 add_library(path_parameter_optimization STATIC ${path_files})
 target_link_libraries(path_parameter_optimization
     PRIVATE shared::core
+    PUBLIC lib::googletest
     PUBLIC shared::protobuf
     PUBLIC Qt5::Core
     PRIVATE shared::config
@@ -86,3 +86,7 @@ target_include_directories(path_parameter_optimization
 
 add_library(amun::path_parameter_optimization ALIAS path_parameter_optimization)
 target_compile_definitions(path_parameter_optimization PUBLIC ACTIVE_PATHFINDING_PARAMETER_OPTIMIZATION)
+
+if("${PATHFINDING_DEBUG}" OR ${CMAKE_BUILD_TYPE} STREQUAL "Debug")
+    target_compile_definitions(path PRIVATE PATHFINDING_DEBUG)
+endif()

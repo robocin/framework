@@ -22,16 +22,21 @@
 #include "commandevaluator.h"
 #include "coordinatehelper.h"
 #include "processor.h"
+#include "protobuf/ssl_wrapper.pb.h"
+#include "protobuf/world.pb.h"
 #include "referee.h"
 #include "core/timer.h"
 #include "core/configuration.h"
 #include "gamecontroller/internalgamecontroller.h"
 #include "tracking/tracker.h"
+#include "tracking/worldparameters.h"
 #include "config/config.h"
 #include <cmath>
 #include <QTimer>
 #include <QFile>
+#include <cstdint>
 #include <google/protobuf/text_format.h>
+#include <optional>
 
 struct Processor::Robot
 {
@@ -120,16 +125,23 @@ const int Processor::FREQUENCY(100);
  */
 Processor::Processor(const Timer *timer, bool isReplay) :
     m_timer(timer),
-    m_tracker(new Tracker(false, false)),
-    m_speedTracker(new Tracker(true, true)),
-    m_simpleTracker(new Tracker(false, false)),
+    m_worldParameters(new WorldParameters { m_simulatorEnabled, isReplay }),
+    m_tracker(new Tracker(false, false, m_worldParameters.get())),
+    m_speedTracker(new Tracker(true, true, m_worldParameters.get())),
+    m_simpleTracker(new Tracker(false, false, m_worldParameters.get())),
     m_mixedTeamInfoSet(false),
     m_refereeInternalActive(isReplay),
     m_lastFlipped(false),
     m_gameController(new InternalGameController(timer)),
-    m_transceiverEnabled(isReplay),
-    m_saveBallModel(!isReplay)
+    m_transceiverEnabled(isReplay)
 {
+    connect(m_worldParameters.get(), &WorldParameters::cameraUpdated, m_tracker.get(), &Tracker::updateCamera);
+    connect(m_worldParameters.get(), &WorldParameters::cameraUpdated, m_simpleTracker.get(), &Tracker::updateCamera);
+
+    connect(m_worldParameters.get(), &WorldParameters::ballModelUpdated, m_tracker.get(), &Tracker::setBallModel);
+    connect(m_worldParameters.get(), &WorldParameters::ballModelUpdated, m_simpleTracker.get(), &Tracker::setBallModel);
+    connect(m_worldParameters.get(), &WorldParameters::ballModelUpdated, m_speedTracker.get(), &Tracker::setBallModel);
+
     // keep two separate referee states
     m_referee = new Referee();
     m_refereeInternal = new Referee();
@@ -161,9 +173,6 @@ Processor::Processor(const Timer *timer, bool isReplay) :
     connect(timer, &Timer::scalingChanged, this, &Processor::setScaling);
 
     loadConfiguration("division-dimensions", &m_divisionDimensions, false);
-
-    loadConfiguration(ballModelConfigFile(m_simulatorEnabled), &m_ballModel, false);
-    m_ballModelUpdated = true;
 }
 
 /*!
@@ -183,43 +192,60 @@ Processor::~Processor()
 
 Status Processor::assembleStatus(qint64 time, bool resetRaw)
 {
-    if (m_ballModelUpdated) {
-        // TODO: handle geometry entirely in processor?
-        m_tracker->setGeometryUpdated();
-    }
-    Status status = m_tracker->worldState(time, resetRaw);
-    Status simplePredictionStatus = m_simpleTracker->worldState(time, resetRaw);
-    status->mutable_world_state()->mutable_simple_tracking_blue()->CopyFrom(simplePredictionStatus->world_state().blue());
-    status->mutable_world_state()->mutable_simple_tracking_yellow()->CopyFrom(simplePredictionStatus->world_state().yellow());
-    if (simplePredictionStatus->world_state().has_ball()) {
-        status->mutable_world_state()->mutable_simple_tracking_ball()->CopyFrom(simplePredictionStatus->world_state().ball());
-    }
-    if (!m_extraVision.empty()) {
-        for(const QByteArray& data : m_extraVision) {
-            status->mutable_world_state()->add_reality()->ParseFromArray(data.data(), data.size());
-        }
-        if (resetRaw) {
-            m_extraVision.clear();
-        }
+    Status status { new amun::Status };
+
+    m_tracker->worldState(status->mutable_world_state(), time, resetRaw);
+
+    if (auto geometry = m_worldParameters->getGeometryUpdate(); geometry) {
+        status->mutable_geometry()->Swap(&*geometry);
     }
 
-    if (status->has_geometry()) {
-        world::Geometry* geometry = status->mutable_geometry();
+    world::State simplePredictionWorldState;
+    m_simpleTracker->worldState(&simplePredictionWorldState, time, resetRaw);
 
-        geometry->mutable_ball_model()->CopyFrom(m_ballModel);
-        m_ballModelUpdated = false;
-
-        if (std::abs(m_divisionDimensions.field_height_b() - geometry->field_height()) <= m_divisionDimensions.field_height_b()*0.1 && std::abs(m_divisionDimensions.field_width_b() - geometry->field_width()) <= m_divisionDimensions.field_width_b()*0.1) {
-            geometry->set_division(world::Geometry_Division_B);
-        } else {
-            if (std::abs(m_divisionDimensions.field_height_a() - geometry->field_height()) > m_divisionDimensions.field_height_a()*0.1 && std::abs(m_divisionDimensions.field_width_a() - geometry->field_width()) <= m_divisionDimensions.field_width_a()*0.1) {
-                std::cerr << "Error, field size doesn't match either division. Dimensions in config/division-dimensions.txt are:\nDivision A: width:"<< m_divisionDimensions.field_width_a() << " height: " << m_divisionDimensions.field_height_a() << "\nDivision B: width:" << m_divisionDimensions.field_width_b() << " height: " << m_divisionDimensions.field_height_b() << "\nDefaulting to division A rules." << std::endl;
-            }
-            geometry->set_division(world::Geometry_Division_A);
-        }
+    status->mutable_world_state()->mutable_simple_tracking_blue()->CopyFrom(simplePredictionWorldState.blue());
+    status->mutable_world_state()->mutable_simple_tracking_yellow()->CopyFrom(simplePredictionWorldState.yellow());
+    if (simplePredictionWorldState.has_ball()) {
+        status->mutable_world_state()->mutable_simple_tracking_ball()->CopyFrom(simplePredictionWorldState.ball());
     }
+
+    // Ensure we are not overwriting the radio command delay if it was set by
+    // the tracking
+    //
+    // This is a bit tough software engineering wise, since we (at the time of
+    // writing) only use the radio command in the Processor, but assemble the
+    // world state in the Tracker.
+    Q_ASSERT(!status->world_state().has_radio_command_delay());
+    status->mutable_world_state()->set_radio_command_delay(m_trackingRadioCommandDelay);
+
+    // add information, about whether the world state is from the simulator or not
+    status->mutable_world_state()->set_is_simulated(m_simulatorEnabled);
+    status->mutable_world_state()->set_world_source(currentWorldSource());
 
     return status;
+}
+
+void Processor::injectAndClearDebugValues(qint64 currentTime, Status &status)
+{
+    amun::DebugValues debug;
+    debug.set_source(amun::Tracking);
+
+    // Inject all prior to the if, instead of in the condition, to prevent
+    // short circuiting
+    const bool anyHasDebug[] = {
+        m_tracker->injectDebugValues(currentTime, &debug),
+        m_worldParameters->injectDebugValues(currentTime, &debug),
+    };
+
+    if (std::any_of(std::begin(anyHasDebug), std::end(anyHasDebug), [](bool b) { return b; })) {
+        status->add_debug()->Swap(&debug);
+    }
+
+    m_tracker->clearDebugValues();
+    m_speedTracker->clearDebugValues();
+    m_simpleTracker->clearDebugValues();
+
+    m_worldParameters->clearDebugData();
 }
 
 world::WorldSource Processor::currentWorldSource() const
@@ -233,49 +259,97 @@ world::WorldSource Processor::currentWorldSource() const
     }
 }
 
-QString Processor::ballModelConfigFile(bool isSimulator)
+/*! \brief Try to infer the current division.
+ *
+ * We do not receive the division explicitly as a message. However we can try
+ * to infer it either from the number of robots or the field size.
+ */
+static world::Geometry::Division tryInferDivision(const ::SSL_Referee_TeamInfo &teamInfo, const world::Geometry &geometry, const world::DivisionDimensions &divisionDimensions)
 {
-    if (isSimulator) {
-        return "field-properties/simulator";
-    } else{
-        return "field-properties/field";
+    // prefer to use the implicit division sent by the SSL_Referee and compute
+    // it using the field sizes defined in the rules as a fall back
+    if (teamInfo.has_max_allowed_bots()) {
+        const auto currentMaxAllowedRobots = teamInfo.max_allowed_bots();
+        const auto currentNumberOfYellowCards = teamInfo.yellow_card_times().size();
+        const auto numberOfRedCards = teamInfo.red_cards();
+        const auto maxAllowedRobots = currentMaxAllowedRobots + currentNumberOfYellowCards + numberOfRedCards;
+        if (maxAllowedRobots == 6) {
+            return world::Geometry_Division_B;
+        } else {
+            return world::Geometry_Division_A;
+        }
     }
+
+    if (std::abs(divisionDimensions.field_height_b() - geometry.field_height()) <= divisionDimensions.field_height_b() * 0.1
+            && std::abs(divisionDimensions.field_width_b() - geometry.field_width()) <= divisionDimensions.field_width_b() * 0.1) {
+        return world::Geometry_Division_B;
+    }
+
+    if (std::abs(divisionDimensions.field_height_a() - geometry.field_height()) > divisionDimensions.field_height_a() * 0.1
+            && std::abs(divisionDimensions.field_width_a() - geometry.field_width()) > divisionDimensions.field_width_a() * 0.1) {
+        std::cerr << "Error, field size doesn't match either division. "
+            << "Dimensions in config/division-dimensions.txt are:"
+            << "\nDivision A: width:" << divisionDimensions.field_width_a()
+            << " height: " << divisionDimensions.field_height_a()
+            << "\nDivision B: width:" << divisionDimensions.field_width_b()
+            << " height: " << divisionDimensions.field_height_b()
+            << "\nDefaulting to division A rules."
+            << std::endl;
+    }
+
+    return world::Geometry_Division_A;
 }
 
 void Processor::process(qint64 overwriteTime)
 {
     const qint64 tracker_start = Timer::systemTime();
 
-    const qint64 current_time = overwriteTime == -1 ? m_timer->currentTime() : overwriteTime;
     // the controller runs with 100 Hz -> 10ms ticks
     const qint64 tickDuration = 1000 * 1000 * 1000 / FREQUENCY;
 
-    // run tracking
-    m_tracker->process(current_time);
-    m_speedTracker->process(current_time);
-    m_simpleTracker->process(current_time);
-    Status status = assembleStatus(current_time, false);
-    Status radioStatus = m_speedTracker->worldState(current_time, false);
+    // We have these three different times to consider for each processing step.
+    // currentTime is the time we have *now*, which is used to compute the world state in this point in time.
+    const qint64 currentTime = overwriteTime == -1 ? m_timer->currentTime() : overwriteTime;
+    // controllerTime is supposed to be the time at which the command we will send out in this call arrives
+    // at the robot and the robot can actually act on it
+    const qint64 controllerTime = currentTime + m_trackingRadioCommandDelay;
+    // This is controllerTime for the next process call. This is relevant, because the strategy needs a world
+    // state that predicts the state at the time at which its commands reach the robot and the decision the
+    // strategy makes will be converted into a radio command at the next process call.
+    const qint64 nextProcessControllerTime = currentTime + tickDuration + m_trackingRadioCommandDelay;
 
-    // add information, about whether the world state is from the simulator or not
-    status->mutable_world_state()->set_is_simulated(m_simulatorEnabled);
-    status->mutable_world_state()->set_world_source(currentWorldSource());
+    // run tracking
+    m_tracker->process(currentTime);
+    m_speedTracker->process(currentTime);
+    m_simpleTracker->process(currentTime);
+
+    Status status = assembleStatus(currentTime, false);
+    injectAndClearDebugValues(currentTime, status);
 
     // run referee
     Referee* activeReferee = (m_refereeInternalActive) ? m_refereeInternal : m_referee;
     activeReferee->process(status->world_state());
     if (activeReferee->getFlipped() != m_lastFlipped) {
         m_lastFlipped = activeReferee->getFlipped();
-        m_tracker->setFlip(m_lastFlipped);
-        m_speedTracker->setFlip(m_lastFlipped);
-        m_simpleTracker->setFlip(m_lastFlipped);
+
+        m_worldParameters->setFlip(m_lastFlipped);
+
         emit setFlipped(m_lastFlipped);
     }
     status->mutable_game_state()->CopyFrom(activeReferee->gameState());
     status->mutable_game_state()->set_is_real_game_running(m_referee->isGameRunning());
 
+    std::optional<world::Geometry::Division> division;
+    if (status->has_geometry()) {
+        world::Geometry* geometry = status->mutable_geometry();
+
+        division.emplace(tryInferDivision(status->game_state().blue(), *geometry, m_divisionDimensions));
+        geometry->set_division(*division);
+    }
+
     // add radio responses from robots and mixed team data
     injectExtraData(status);
+    injectRawWorldState(status);
 
     // add input / commands from the user for the strategy
     injectUserControl(status, true);
@@ -291,33 +365,43 @@ void Processor::process(qint64 overwriteTime)
 
     {
         QList<robot::RadioCommand> radio_commands;
+        // compute world state and speed for the time at which the command reaches the robot
+        world::State commandWorldState, radioWorldState;
+        m_tracker->worldState(&commandWorldState, controllerTime, false);
+        m_speedTracker->worldState(&radioWorldState, controllerTime, false);
 
-        // assume that current_time is still "now"
-        const qint64 controllerTime = current_time + tickDuration;
-        processTeam(m_blueTeam, true, status->world_state().blue(), radio_commands_prio, radio_commands,
-                    status, controllerTime, radioStatus->world_state().blue(), debug);
-        processTeam(m_yellowTeam, false, status->world_state().yellow(), radio_commands_prio, radio_commands,
-                    status, controllerTime, radioStatus->world_state().yellow(), debug);
+        processTeam(m_blueTeam, true, commandWorldState.blue(), radio_commands_prio, radio_commands,
+                    status, controllerTime, radioWorldState.blue(), debug);
+        processTeam(m_yellowTeam, false, commandWorldState.yellow(), radio_commands_prio, radio_commands,
+                    status, controllerTime, radioWorldState.yellow(), debug);
 
         radio_commands_prio.append(radio_commands);
     }
 
     if (m_transceiverEnabled) {
-        // the command is active starting from now
-        m_tracker->queueRadioCommands(radio_commands_prio, current_time+1);
+        // Add delay to time, because the command takes time before it arrives at the robot, which means we need to delay the time, before the
+        // tracking expects the command to take effect.
+        // Previous behavior was to just add 1 nanosecond to make sure that it is higher than m_futureTime of the robot filter, so it definitely
+        // gets applied to the future kalman.
+        m_tracker->queueRadioCommands(radio_commands_prio, currentTime + std::max(m_trackingRadioCommandDelay, static_cast<uint64_t>(1)));
     }
 
     // prediction which accounts for the strategy runtime
     // depends on the just created radio command
-    Status strategyStatus = assembleStatus(current_time + tickDuration, true);
-    strategyStatus->mutable_world_state()->set_is_simulated(m_simulatorEnabled);
-    strategyStatus->mutable_world_state()->set_world_source(currentWorldSource());
+    Status strategyStatus = assembleStatus(nextProcessControllerTime, true);
+
     strategyStatus->mutable_game_state()->CopyFrom(activeReferee->gameState());
+
+    if (strategyStatus->has_geometry() && division) {
+        strategyStatus->mutable_geometry()->set_division(*division);
+    }
+
     injectExtraData(strategyStatus);
+
     // remove responses after injecting to avoid sending them a second time
-    m_responses.clear();
-    m_mixedTeamInfo.Clear();
-    m_mixedTeamInfoSet = false;
+    clearExtraData();
+    clearRawWorldState();
+
     // copy to other status message
     strategyStatus->mutable_user_input_yellow()->CopyFrom(status->user_input_yellow());
     strategyStatus->mutable_user_input_blue()->CopyFrom(status->user_input_blue());
@@ -328,10 +412,10 @@ void Processor::process(qint64 overwriteTime)
     emit sendStatus(status);
 
     if (m_transceiverEnabled) {
-        emit sendRadioCommands(radio_commands_prio, current_time);
+        emit sendRadioCommands(radio_commands_prio, currentTime);
     }
 
-    m_tracker->finishProcessing();
+    m_worldParameters->finishProcessing();
 }
 
 const world::Robot* Processor::getWorldRobot(const RobotList &robots, uint id) {
@@ -352,9 +436,38 @@ void Processor::injectExtraData(Status &status)
         robot::RadioResponse *rr = status->mutable_world_state()->add_radio_response();
         rr->CopyFrom(response);
     }
+
     if (m_mixedTeamInfoSet) {
         *(status->mutable_world_state()->mutable_mixed_team_info()) = m_mixedTeamInfo;
     }
+}
+
+void Processor::clearExtraData() {
+    m_responses.clear();
+
+    m_mixedTeamInfo.Clear();
+    m_mixedTeamInfoSet = false;
+}
+
+void Processor::injectRawWorldState(Status &status)
+{
+    world::State* worldState = status->mutable_world_state();
+
+    for(const QByteArray& data : m_extraVision) {
+        worldState->add_reality()->ParseFromArray(data.data(), data.size());
+    }
+
+    worldState->set_has_vision_data(!m_visionWrapperPackets.empty());
+    for (const auto& [wrapper, time] : m_visionWrapperPackets) {
+        worldState->add_vision_frames()->CopyFrom(wrapper);
+        worldState->add_vision_frame_times(time);
+    }
+}
+
+void Processor::clearRawWorldState()
+{
+    m_extraVision.clear();
+    m_visionWrapperPackets.clear();
 }
 
 void Processor::injectUserControl(Status &status, bool isBlue)
@@ -438,9 +551,24 @@ void Processor::handleRefereePacket(const QByteArray &data, qint64 /*time*/, QSt
 
 void Processor::handleVisionPacket(const QByteArray &data, qint64 time, QString sender)
 {
-    m_tracker->queuePacket(data, time, sender);
-    m_speedTracker->queuePacket(data, time, sender);
-    m_simpleTracker->queuePacket(data, time, sender);
+    SSL_WrapperPacket wrapper;
+    if (!wrapper.ParseFromArray(data.data(), data.size())) {
+        return;
+    }
+
+    m_visionWrapperPackets.emplace_back(wrapper, time);
+
+    if (wrapper.has_geometry()) {
+        m_worldParameters->handleVisionGeometry(wrapper.geometry(), sender);
+    }
+
+    if (wrapper.has_detection()) {
+        const auto& detection = wrapper.detection();
+
+        m_tracker->queuePacket(detection, time);
+        m_speedTracker->queuePacket(detection, time);
+        m_simpleTracker->queuePacket(detection, time);
+    }
 }
 
 void Processor::handleSimulatorExtraVision(const QByteArray &data)
@@ -479,7 +607,6 @@ void Processor::setTeam(const robot::Team &t, Team &team)
 void Processor::handleCommand(const Command &command)
 {
     bool teamsChanged = false;
-    bool simulatorEnabledBefore = m_simulatorEnabled;
 
     if (command->has_set_team_blue()) {
         setTeam(command->set_team_blue(), m_blueTeam);
@@ -516,9 +643,14 @@ void Processor::handleCommand(const Command &command)
 
     if (command->has_tracking()) {
         const qint64 currentTime = m_timer->currentTime();
+
         m_tracker->handleCommand(command->tracking(), currentTime);
         m_speedTracker->handleCommand(command->tracking(), currentTime);
         m_simpleTracker->handleCommand(command->tracking(), currentTime);
+
+        if (command->tracking().has_radio_command_delay()) {
+            m_trackingRadioCommandDelay = command->tracking().radio_command_delay();
+        }
     }
 
     if (command->has_transceiver()) {
@@ -533,21 +665,8 @@ void Processor::handleCommand(const Command &command)
         }
     }
 
-    if (command->has_tracking() && command->tracking().has_ball_model()) {
-        m_ballModel.CopyFrom(command->tracking().ball_model());
-        if (m_saveBallModel) {
-            saveConfiguration(ballModelConfigFile(m_simulatorEnabled), &m_ballModel);
-        }
-        m_ballModelUpdated = true;
-    }
-    if (simulatorEnabledBefore != m_simulatorEnabled) {
-        loadConfiguration(ballModelConfigFile(m_simulatorEnabled), &m_ballModel, false);
-        m_ballModelUpdated = true;
-    }
-    if (m_ballModelUpdated) {
-        m_tracker->setBallModel(m_ballModel);
-        m_speedTracker->setBallModel(m_ballModel);
-        m_simpleTracker->setBallModel(m_ballModel);
+    if (command->has_tracking()) {
+        m_worldParameters->handleCommand(command->tracking(), m_simulatorEnabled);
     }
 }
 
@@ -556,6 +675,8 @@ void Processor::resetTracking()
     m_tracker->reset();
     m_speedTracker->reset();
     m_simpleTracker->reset();
+
+    m_worldParameters->reset();
 }
 
 void Processor::handleControl(Team &team, const amun::CommandControl &control)

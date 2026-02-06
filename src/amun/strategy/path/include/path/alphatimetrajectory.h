@@ -22,7 +22,8 @@
 #define ALPHATIMETRAJECTORY_H
 
 #include "core/vector.h"
-#include "speedprofile.h"
+#include "gtest/gtest.h"
+#include "trajectory.h"
 #include <vector>
 #include <optional>
 
@@ -35,6 +36,8 @@ enum class EndSpeed {
 // WARNING: generated trajectories may exceed the maximum velocity by a factor of up to sqrt(2) in rare cases
 class AlphaTimeTrajectory
 {
+    FRIEND_TEST(AlphaTimeTrajectory, calculateTrajectoryPositionInvariant);
+
 public:
     // helper functions
     static float minimumTime(Vector startSpeed, Vector endSpeed, float acc, EndSpeed endSpeedType);
@@ -56,8 +59,9 @@ private:
     };
 
     // pos only
-    // WARNING: assumes that the input is valid and solvable (minimumTime must be included)
-    static TrajectoryPosInfo2D calculatePosition(const RobotState &start, Vector v1, float time, float angle, float acc, float vMax, EndSpeed endSpeedType);
+    // WARNING: assumes that the input is valid and solvable
+    static TrajectoryPosInfo2D calculatePosition(const RobotState &start, Vector v1, float time, float angle, float acc, float vMax,
+                                                 EndSpeed endSpeedType, float minTime = -1);
     static std::optional<Trajectory> tryDirectBrake(const RobotState &start, const RobotState &target, float acc, float slowDownTime);
     static Trajectory minTimeTrajectory(const RobotState &start, Vector v1, float slowDownTime, float minTime);
 
