@@ -673,9 +673,11 @@ int main(int argc, char* argv[])
     QCommandLineOption geometryConfig({"g", "geometry"}, "The geometry file to load as default", "file", "2020B");
     QCommandLineOption realismConfig("realism", "Simulator realism configuration (short file name without the .txt)", "realism", "Realistic");
     QCommandLineOption localhostConfig("localhost", "Use localhost as the output address for the simulator");
+    QCommandLineOption portConfig({"p", "port"}, "The port to use for the simulator", "port", std::to_string(SSL_SIMULATED_VISION_PORT).c_str());
     parser.addOption(geometryConfig);
     parser.addOption(realismConfig);
     parser.addOption(localhostConfig);
+    parser.addOption(portConfig);
 
     parser.process(app);
 
@@ -699,7 +701,7 @@ int main(int argc, char* argv[])
     Timer timer;
     RobotCommandAdaptor blue{true, &timer}, yellow{false, &timer};
     SimProxy sim{&timer};
-    SSLVisionServer vision{SSL_SIMULATED_VISION_PORT, parser.isSet(localhostConfig) ? SSL_VISION_ADDRESS_LOCALHOST : SSL_VISION_ADDRESS};
+    SSLVisionServer vision{parser.value(portConfig).toInt(), parser.isSet(localhostConfig) ? SSL_VISION_ADDRESS_LOCALHOST : SSL_VISION_ADDRESS};
     SimulatorCommandAdaptor commands{&timer, &vision};
 
     blue.connect(&blue, &RobotCommandAdaptor::sendRadioCommands, &sim, &SimProxy::handleRadioCommands);
